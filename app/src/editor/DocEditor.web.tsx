@@ -20,10 +20,16 @@ export const DocEditor = forwardRef<DocEditorRef, DocEditorProps>(
       handle.current = mountEditor({
         el: host.current,
         markdown: props.markdown,
+        y: props.y,
+        title: props.title,
+        user: props.user,
         readOnly: props.readOnly,
         colors: colorsFor(theme),
         resolveImage: url => live.current.resolveImage(url),
-        onChange: md => live.current.onChange(md),
+        onChange: (md, local) => live.current.onChange(md, local),
+        onTitle: t => live.current.onTitle(t),
+        onLocalChange: u => live.current.onLocalChange(u),
+        onAware: a => live.current.onAware(a),
         onPickImage: () => live.current.onPickImage(),
         onOpenLink: href => live.current.onOpenLink?.(href),
       });
@@ -44,6 +50,13 @@ export const DocEditor = forwardRef<DocEditorRef, DocEditorProps>(
 
     useImperativeHandle(ref, () => ({
       insertImage: (url, alt) => handle.current?.insertImage(url, alt),
+      applyChanges: u => handle.current?.applyChanges(u),
+      setPeers: p => handle.current?.setPeers(p),
+      setTitle: t => handle.current?.setTitle(t),
+      snapshot: async () => {
+        if (!handle.current) throw new Error('The editor is closed.');
+        return handle.current.snapshot();
+      },
     }));
 
     return (

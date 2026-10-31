@@ -14,7 +14,7 @@ import {WebView, WebViewMessageEvent, WebViewProps} from 'react-native-webview';
 
 import {useTheme} from '../theme';
 import {EDITOR_HTML} from './editorHtml.generated';
-import {colorsFor, DocEditorProps, DocEditorRef} from './types';
+import {colorsFor, DocEditorProps, DocEditorRef, Snapshot} from './types';
 
 export const DocEditor = forwardRef<DocEditorRef, DocEditorProps>(
   function DocEditor(props, ref) {
@@ -23,6 +23,13 @@ export const DocEditor = forwardRef<DocEditorRef, DocEditorProps>(
     const [ready, setReady] = useState(false);
     const live = useRef(props);
     live.current = props;
+    const snapshots = useRef(
+      new Map<
+        number,
+        {resolve: (s: Snapshot) => void; reject: (e: Error) => void}
+      >(),
+    );
+    const nextSnapshot = useRef(1);
 
     const send = (msg: object) => web.current?.postMessage(JSON.stringify(msg));
 
@@ -37,6 +44,16 @@ export const DocEditor = forwardRef<DocEditorRef, DocEditorProps>(
 
     useImperativeHandle(ref, () => ({
       insertImage: (url, alt) => send({type: 'insertImage', url, alt}),
+      applyChanges: updates => send({type: 'changes', updates}),
+      setPeers: peers => send({type: 'peers', peers}),
+      setTitle: title => send({type: 'setTitle', title}),
+      snapshot: () =>
+        new Promise<Snapshot>((resolve, reject) => {
+          if (!ready) return reject(new Error('The editor is still loading.'));
+          const id = nextSnapshot.current++;
+          snapshots.current.set(id, {resolve, reject});
+          send({type: 'snapshot', id});
+        }),
     }));
 
     const onMessage = (e: WebViewMessageEvent) => {
@@ -52,14 +69,35 @@ export const DocEditor = forwardRef<DocEditorRef, DocEditorProps>(
           send({
             type: 'init',
             markdown: live.current.markdown,
+            y: live.current.y,
+            title: live.current.title,
+            user: live.current.user,
             readOnly: live.current.readOnly,
             colors: colorsFor(theme),
             autoFocus: live.current.autoFocus,
           });
           break;
         case 'change':
-          if (typeof m.markdown === 'string') live.current.onChange(m.markdown);
+          if (typeof m.markdown === 'string')
+            live.current.onChange(m.markdown, m.local !== false);
           break;
+        case 'title':
+          if (typeof m.title === 'string') live.current.onTitle(m.title);
+          break;
+        case 'localChange':
+          if (typeof m.update === 'string')
+            live.current.onLocalChange(m.update);
+          break;
+        case 'aware':
+          if (typeof m.aware === 'string') live.current.onAware(m.aware);
+          break;
+        case 'snapshot': {
+          const w = snapshots.current.get(m.id);
+          snapshots.current.delete(m.id);
+          if (m.snapshot) w?.resolve(m.snapshot);
+          else w?.reject(new Error(String(m.error ?? 'snapshot failed')));
+          break;
+        }
         case 'pickImage':
           live.current.onPickImage();
           break;

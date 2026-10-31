@@ -18,6 +18,8 @@ import {
   DocHead,
   formatShareLink,
   makeHead,
+  decodeBody,
+  encodeBody,
   imageUrl,
   joinProof,
   linkKeys,
@@ -151,6 +153,10 @@ export interface OpenDoc {
   doc: DocFull;
   key: Uint8Array;
   markdown: string;
+  /** The shared editing state (b64), or null for a page saved before live editing. */
+  y: string | null;
+  /** The body exactly as stored, for re-sealing it under a new key. */
+  body: string;
   /** The page's title, kept apart from its text ('' until someone names it). */
   title: string;
   /** False if the last save's signature didn't check out against its writer's key. */
@@ -170,7 +176,8 @@ export async function openDoc(id: string): Promise<OpenDoc> {
   const doc = await api.doc(s.server, s.account, id);
   const key = docKey(s, doc);
   if (!key) throw new LockedError();
-  const markdown = openBody(key, doc.id, doc.epoch, doc.body_ct);
+  const body = openBody(key, doc.id, doc.epoch, doc.body_ct);
+  const {markdown, y} = decodeBody(body);
   const {title} = openHead(key, doc.id, doc.epoch, doc.head_ct);
   const writer = doc.members.find(m => m.id === doc.updated_by);
   const verified =
@@ -184,7 +191,7 @@ export async function openDoc(id: string): Promise<OpenDoc> {
       doc.body_ct,
       doc.sig,
     );
-  return {doc, key, markdown, title, verified};
+  return {doc, key, markdown, y, body, title, verified};
 }
 
 function sealed(
@@ -195,10 +202,12 @@ function sealed(
   key: Uint8Array,
   markdown: string,
   title: string,
+  y: string | null = null,
+  body = encodeBody({markdown, y}),
 ) {
   const head = makeHead(title, markdown);
   const head_ct = sealHead(key, id, epoch, head);
-  const body_ct = sealBody(key, id, epoch, markdown);
+  const body_ct = sealBody(key, id, epoch, body);
   return {
     head,
     head_ct,
@@ -266,7 +275,7 @@ export class ConflictError extends Error {
   }
 }
 
-/** Saves the title and markdown as the version after base. Throws ConflictError if someone else saved first. */
+/** Saves the title, markdown and shared state (if any) as the version after base. Throws ConflictError if someone else saved first. */
 export async function saveDoc(
   id: string,
   base: number,
@@ -274,6 +283,7 @@ export async function saveDoc(
   key: Uint8Array,
   markdown: string,
   title: string,
+  y: string | null = null,
 ): Promise<number> {
   const s = session.require();
   const {head, head_ct, body_ct, sig} = sealed(
@@ -284,6 +294,7 @@ export async function saveDoc(
     key,
     markdown,
     title,
+    y,
   );
   try {
     const res = await api.saveDoc(s.server, s.account, id, {
@@ -378,7 +389,7 @@ export async function cancelPending(
  */
 export async function rekey(id: string, remove: string[] = []): Promise<void> {
   const s = session.require();
-  const {doc, markdown, title} = await openDoc(id);
+  const {doc, markdown, title, y, body} = await openDoc(id);
   const epoch = doc.epoch + 1;
   const key = newDocKey();
   const stay = doc.members.filter((m: Member) => !remove.includes(m.id));
@@ -390,6 +401,8 @@ export async function rekey(id: string, remove: string[] = []): Promise<void> {
     key,
     markdown,
     title,
+    y,
+    body,
   );
   const wrapped: Record<string, string> = {};
   for (const m of stay) wrapped[m.id] = wrapDocKey(key, m.box_pub, id);

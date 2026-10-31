@@ -351,6 +351,7 @@ func (a *API) deleteDoc(c *gin.Context) {
 		return
 	}
 	a.removeBlobFiles(blobs)
+	a.live.drop(d.ID, "")
 	c.Status(http.StatusNoContent)
 }
 
@@ -401,6 +402,7 @@ func (a *API) leaveDoc(c *gin.Context) {
 		return
 	}
 	a.removeBlobFiles(blobs)
+	a.live.drop(d.ID, u.ID)
 	c.Status(http.StatusNoContent)
 }
 
@@ -491,6 +493,8 @@ func (a *API) rekeyDoc(c *gin.Context) {
 	case err != nil:
 		dbError(c, err)
 	default:
+		// Changes sealed under the old key are no use to anyone now.
+		a.live.drop(d.ID, "")
 		c.JSON(http.StatusOK, gin.H{"version": req.BaseVersion + 1, "epoch": req.Epoch, "updated_at": now})
 	}
 }

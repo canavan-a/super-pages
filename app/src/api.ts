@@ -50,11 +50,12 @@ export async function request<T>(
   path: string,
   by: Signer | null,
   body?: unknown,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const text = body === undefined ? '' : JSON.stringify(body);
   const bytes = utf8(text);
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
   let res: Response;
   let out: string;
   try {
@@ -207,6 +208,28 @@ export interface SaveBody {
   wrapped_key?: string;
 }
 
+/** A live check-in (POST /docs/:id/live); everything in it is sealed by the apps. */
+export interface LiveReq {
+  tab: string;
+  since: number;
+  gen?: number;
+  wait?: boolean;
+  hidden?: boolean;
+  leaving?: boolean;
+  aware?: string;
+  updates?: string[];
+}
+
+export interface LiveResp {
+  seq: number;
+  gen: number;
+  reset?: boolean;
+  msgs: {seq: number; user: string; tab: string; data: string}[];
+  viewers: {user: string; tab: string; aware?: string}[];
+  version: number;
+  epoch: number;
+}
+
 export interface ShareLinkInfo {
   id: string;
   role: Role;
@@ -321,6 +344,17 @@ export const api = {
     ),
   deleteDoc: (server: string, by: Signer, id: string) =>
     request<void>(server, 'DELETE', `/v1/docs/${id}`, by),
+  /** Waiting check-ins are held up to 20s by the server. */
+  live: (server: string, by: Signer, id: string, body: LiveReq) =>
+    request<LiveResp>(
+      server,
+      'POST',
+      `/v1/docs/${id}/live`,
+      by,
+      body,
+      body.wait ? 35_000 : REQUEST_TIMEOUT_MS,
+    ),
+
   leaveDoc: (server: string, by: Signer, id: string) =>
     request<void>(server, 'POST', `/v1/docs/${id}/leave`, by),
 

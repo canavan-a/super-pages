@@ -3,13 +3,27 @@
 // The browser build mounts it straight into the page (DocEditor.web.tsx);
 // the Android app runs the same code inside a WebView (native-entry.ts,
 // bundled by scripts/build-editor.mjs).
-import {Editor} from '@tiptap/core';
+//
+// Pages are edited together: the editor is bound to a shared Yjs document
+// (the text, and the title beside it), and hands out the changes made here
+// and other tabs' cursors as bytes for the app to seal and relay (live.ts).
+import {AnyExtension, Editor} from '@tiptap/core';
+import {Collaboration, isChangeOrigin} from '@tiptap/extension-collaboration';
+import {CollaborationCaret} from '@tiptap/extension-collaboration-caret';
 import Image from '@tiptap/extension-image';
 import {TaskItem, TaskList} from '@tiptap/extension-list';
 import {Placeholder} from '@tiptap/extensions';
 import {Markdown} from '@tiptap/markdown';
 import {Selection} from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
+import {prosemirrorJSONToYXmlFragment} from '@tiptap/y-tiptap';
+import {
+  applyAwarenessUpdate,
+  Awareness,
+  encodeAwarenessUpdate,
+  removeAwarenessStates,
+} from 'y-protocols/awareness';
+import * as Y from 'yjs';
 
 export interface EditorColors {
   bg: string;
@@ -24,14 +38,46 @@ export interface EditorColors {
   inlineCodeBg: string;
 }
 
+/** Who this tab is to the others: the name on its cursor, and its color. */
+export interface EditorUser {
+  name: string;
+  color: string;
+  tab: string;
+}
+
+export interface Peer {
+  tab: string;
+  /** Its awareness update (cursor), b64url; null if it hasn't sent one. */
+  aware: string | null;
+}
+
+export interface Snapshot {
+  markdown: string;
+  title: string;
+  /** The whole shared state, b64url. */
+  y: string;
+}
+
 export interface EditorOptions {
   el: HTMLElement;
   markdown: string;
+  /** The shared state to start from (b64url), or null for a page saved as markdown only. */
+  y: string | null;
+  /** The saved title, for a page saved as markdown only. */
+  title: string;
+  user: EditorUser;
   readOnly: boolean;
   colors: EditorColors;
   /** Turns an sp-img: URL into something an <img> can show (a data: URI). */
   resolveImage: (url: string) => Promise<string>;
-  onChange: (markdown: string) => void;
+  /** The page changed; local is false when it was someone else's change. */
+  onChange: (markdown: string, local: boolean) => void;
+  /** Someone else renamed the page. */
+  onTitle?: (title: string) => void;
+  /** A change made here (a Yjs update, b64url), to send to the others. */
+  onLocalChange?: (update: string) => void;
+  /** This tab's cursor moved (an awareness update, b64url). */
+  onAware?: (aware: string) => void;
   /** The toolbar's image button: pick, encrypt and upload, then insertImage. */
   onPickImage: () => void;
   /** A link was tapped (links don't navigate the editor). */
@@ -43,6 +89,12 @@ export interface EditorHandle {
   setColors(colors: EditorColors): void;
   insertImage(url: string, alt?: string): void;
   getMarkdown(): string;
+  /** Others' changes (b64url Yjs updates); also how a saved state is merged in. */
+  applyChanges(updates: string[]): void;
+  /** Who else has the page open, with their cursors. */
+  setPeers(peers: Peer[]): void;
+  setTitle(title: string): void;
+  snapshot(): Snapshot;
   focus(): void;
   destroy(): void;
 }
@@ -212,7 +264,68 @@ const BASE_CSS = `
 .ProseMirror p.is-empty::before, .ProseMirror h1.is-empty::before, .ProseMirror h2.is-empty::before {
   content:attr(data-placeholder); color:var(--muted); opacity:0.6; float:left; height:0; pointer-events:none; }
 @keyframes sp-pulse { 50% { opacity:0.5; } }
+.sp-caret { position:relative; margin-left:-1px; margin-right:-1px; border-left:2px solid; word-break:normal; }
+.sp-caret::before { content:""; position:absolute; left:-7px; right:-7px; top:-2px; bottom:-2px; }
+.sp-caret-label { position:absolute; left:-2px; bottom:100%; padding:1px 6px; border-radius:5px 5px 5px 0; color:#fff;
+  font:600 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; white-space:nowrap;
+  user-select:none; pointer-events:none; opacity:0; transform:translateY(3px); transition:opacity .12s, transform .12s; z-index:2; }
+.sp-caret:hover .sp-caret-label { opacity:1; transform:none; }
 `;
+
+const REMOTE = 'remote';
+const LOAD = 'load';
+
+const toB64 = (u: Uint8Array): string => {
+  let s = '';
+  for (let i = 0; i < u.length; i += 0x8000)
+    s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+const fromB64 = (s: string): Uint8Array => {
+  const t = s.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(t + '='.repeat((4 - (t.length % 4)) % 4));
+  const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+};
+
+const baseExtensions = (): AnyExtension[] => [
+  // Collaboration brings its own undo history.
+  StarterKit.configure({
+    link: {openOnClick: false, autolink: true},
+    undoRedo: false,
+  }),
+  Markdown,
+  TaskList,
+  TaskItem.configure({nested: true}),
+];
+
+/**
+ * The shared state for a page saved as markdown only. Every tab that opens
+ * such a page builds it the same way, under the same fixed client id, so the
+ * copies are identical and merge into one rather than doubling the text.
+ */
+function seedState(markdown: string, title: string): Uint8Array {
+  const tmp = new Editor({
+    extensions: [
+      ...baseExtensions(),
+      Image.configure({inline: false, allowBase64: false}),
+    ],
+    content: markdown,
+    contentType: 'markdown',
+  });
+  const json = tmp.getJSON();
+  const schema = tmp.schema;
+  tmp.destroy();
+  const d = new Y.Doc();
+  d.clientID = 1;
+  prosemirrorJSONToYXmlFragment(schema, json, d.getXmlFragment('default'));
+  if (title) d.getText('title').insert(0, title);
+  const out = Y.encodeStateAsUpdate(d);
+  d.destroy();
+  return out;
+}
 
 export function mountEditor(o: EditorOptions): EditorHandle {
   o.el.innerHTML = '';
@@ -233,17 +346,61 @@ export function mountEditor(o: EditorOptions): EditorHandle {
   root.appendChild(scroll);
   o.el.appendChild(root);
 
+  const ydoc = new Y.Doc();
+  Y.applyUpdate(
+    ydoc,
+    o.y ? fromB64(o.y) : seedState(o.markdown, o.title),
+    LOAD,
+  );
+  const ytitle = ydoc.getText('title');
+  const awareness = new Awareness(ydoc);
+  awareness.setLocalStateField('tab', o.user.tab);
+
+  ydoc.on('update', (u: Uint8Array, origin: unknown) => {
+    if (origin !== REMOTE && origin !== LOAD) o.onLocalChange?.(toB64(u));
+  });
+  ytitle.observe(ev => {
+    if (ev.transaction.origin === REMOTE) o.onTitle?.(ytitle.toString());
+  });
+  awareness.on(
+    'update',
+    (
+      {added, updated}: {added: number[]; updated: number[]},
+      origin: unknown,
+    ) => {
+      if (
+        origin === 'local' &&
+        [...added, ...updated].includes(awareness.clientID)
+      )
+        o.onAware?.(
+          toB64(encodeAwarenessUpdate(awareness, [awareness.clientID])),
+        );
+    },
+  );
+
   const editor = new Editor({
     element: host,
     editable: !o.readOnly,
-    content: o.markdown,
-    contentType: 'markdown',
     extensions: [
-      StarterKit.configure({link: {openOnClick: false, autolink: true}}),
-      Markdown,
-      TaskList,
-      TaskItem.configure({nested: true}),
+      ...baseExtensions(),
       secureImage(o.resolveImage),
+      Collaboration.configure({document: ydoc}),
+      CollaborationCaret.configure({
+        provider: {awareness},
+        user: {name: o.user.name.slice(0, 60), color: o.user.color},
+        // The name shows when the cursor is hovered.
+        render: user => {
+          const caret = document.createElement('span');
+          caret.className = 'sp-caret';
+          caret.style.borderColor = user.color;
+          const label = document.createElement('span');
+          label.className = 'sp-caret-label';
+          label.style.backgroundColor = user.color;
+          label.textContent = user.name;
+          caret.appendChild(label);
+          return caret;
+        },
+      }),
       Placeholder.configure({
         placeholder: 'Start writing…',
         showOnlyCurrent: true,
@@ -265,7 +422,13 @@ export function mountEditor(o: EditorOptions): EditorHandle {
         return false;
       },
     },
-    onUpdate: ({editor: e}) => o.onChange(e.getMarkdown()),
+    // Only changes made here count as local: not others' (they come in
+    // through y-sync), and not an empty update (setEditable sends one).
+    onUpdate: ({editor: e, transaction}) =>
+      o.onChange(
+        e.getMarkdown(),
+        transaction.docChanged && !isChangeOrigin(transaction),
+      ),
   });
 
   const buttons: {el: HTMLButtonElement; b: Btn}[] = [];
@@ -325,6 +488,43 @@ export function mountEditor(o: EditorOptions): EditorHandle {
       focusView();
     },
     getMarkdown: () => editor.getMarkdown(),
+    applyChanges(updates) {
+      for (const u of updates) {
+        try {
+          Y.applyUpdate(ydoc, fromB64(u), REMOTE);
+        } catch {
+          // not a Yjs update: skip it
+        }
+      }
+    },
+    setPeers(peers) {
+      for (const p of peers) {
+        if (!p.aware) continue;
+        try {
+          applyAwarenessUpdate(awareness, fromB64(p.aware), REMOTE);
+        } catch {
+          // skip it
+        }
+      }
+      const here = new Set(peers.map(p => p.tab));
+      const gone: number[] = [];
+      awareness.getStates().forEach((st, id) => {
+        if (id !== awareness.clientID && !here.has(st?.tab)) gone.push(id);
+      });
+      if (gone.length) removeAwarenessStates(awareness, gone, REMOTE);
+    },
+    setTitle(title) {
+      if (title === ytitle.toString()) return;
+      ydoc.transact(() => {
+        ytitle.delete(0, ytitle.length);
+        ytitle.insert(0, title);
+      }, 'title');
+    },
+    snapshot: () => ({
+      markdown: editor.getMarkdown(),
+      title: ytitle.toString(),
+      y: toB64(Y.encodeStateAsUpdate(ydoc)),
+    }),
     focus: () => {
       editor.view.dispatch(
         editor.state.tr.setSelection(Selection.atEnd(editor.state.doc)),
@@ -333,6 +533,8 @@ export function mountEditor(o: EditorOptions): EditorHandle {
     },
     destroy() {
       editor.destroy();
+      awareness.destroy();
+      ydoc.destroy();
       o.el.innerHTML = '';
     },
   };

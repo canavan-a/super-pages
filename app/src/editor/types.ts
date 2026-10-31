@@ -1,12 +1,21 @@
 import type {Theme} from '../theme';
-import type {EditorColors} from './core';
+import type {EditorColors, EditorUser, Peer, Snapshot} from './core';
+
+export type {EditorUser, Peer, Snapshot};
 
 export interface DocEditorProps {
   /** The page as it was opened. Later changes come from the editor itself. */
   markdown: string;
+  /** The shared state as it was opened (b64url), or null for a markdown-only page. */
+  y: string | null;
+  title: string;
+  user: EditorUser;
   readOnly: boolean;
   autoFocus?: boolean;
-  onChange: (markdown: string) => void;
+  onChange: (markdown: string, local: boolean) => void;
+  onTitle: (title: string) => void;
+  onLocalChange: (update: string) => void;
+  onAware: (aware: string) => void;
   onPickImage: () => void;
   resolveImage: (url: string) => Promise<string>;
   onOpenLink?: (href: string) => void;
@@ -14,6 +23,10 @@ export interface DocEditorProps {
 
 export interface DocEditorRef {
   insertImage(url: string, alt?: string): void;
+  applyChanges(updates: string[]): void;
+  setPeers(peers: Peer[]): void;
+  setTitle(title: string): void;
+  snapshot(): Promise<Snapshot>;
 }
 
 export function colorsFor(t: Theme): EditorColors {

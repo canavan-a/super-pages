@@ -136,6 +136,58 @@ export function verifySave(
   }
 }
 
+// ---- live editing ----
+
+const liveAd = (doc: string, epoch: number) => utf8(`sp-live|${doc}|${epoch}`);
+
+/** A live change or cursor, sealed for the relay (server/api/live.go). */
+export function sealLive(
+  key: Uint8Array,
+  doc: string,
+  epoch: number,
+  data: Uint8Array,
+): string {
+  return b64(aeadSeal(key, data, liveAd(doc, epoch)));
+}
+
+export function openLive(
+  key: Uint8Array,
+  doc: string,
+  epoch: number,
+  ct: string,
+): Uint8Array {
+  return aeadOpen(key, unb64(ct), liveAd(doc, epoch));
+}
+
+/**
+ * What's sealed as a page's body. Pages edited together are stored as
+ * their shared (Yjs) state, b64, with the markdown beside it for anything
+ * that only reads; older pages are the markdown alone.
+ */
+export interface DocBody {
+  markdown: string;
+  y: string | null;
+}
+
+export function encodeBody(b: DocBody): string {
+  return b.y === null
+    ? b.markdown
+    : JSON.stringify({v: 2, md: b.markdown, y: b.y});
+}
+
+export function decodeBody(text: string): DocBody {
+  if (text.startsWith('{"v":2,')) {
+    try {
+      const j = JSON.parse(text);
+      if (typeof j.md === 'string' && typeof j.y === 'string')
+        return {markdown: j.md, y: j.y};
+    } catch {
+      // markdown that happens to start that way
+    }
+  }
+  return {markdown: text, y: null};
+}
+
 // ---- head from markdown ----
 
 /** Plain text of a markdown line: formatting marks and image links dropped. */

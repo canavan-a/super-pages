@@ -10,6 +10,10 @@ import {
   docSigningString,
   entropyFromPhrase,
   makeHead,
+  decodeBody,
+  encodeBody,
+  openLive,
+  sealLive,
   imageUrl,
   joinProof,
   linkKeys,
@@ -180,4 +184,26 @@ test('Go interop fixture', () => {
   if (process.env.UPDATE_FIXTURE)
     writeFileSync(path, JSON.stringify(fixture, null, 2) + '\n');
   expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(fixture);
+});
+
+test('page bodies carry the shared editing state; older ones are markdown', () => {
+  const live = {markdown: '# Notes\n\nhi', y: 'AQID'};
+  expect(decodeBody(encodeBody(live))).toEqual(live);
+  expect(decodeBody('# Notes\n\nhi')).toEqual({
+    markdown: '# Notes\n\nhi',
+    y: null,
+  });
+  expect(encodeBody({markdown: 'plain', y: null})).toBe('plain');
+  // Markdown that only looks like the new format stays markdown.
+  expect(decodeBody('{"v":2, not json').y).toBeNull();
+});
+
+test('live changes are bound to their page and key', () => {
+  const doc = newId();
+  const key = newDocKey();
+  const ct = sealLive(key, doc, 2, new Uint8Array([1, 2, 3]));
+  expect(Array.from(openLive(key, doc, 2, ct))).toEqual([1, 2, 3]);
+  expect(() => openLive(key, doc, 3, ct)).toThrow();
+  expect(() => openLive(key, newId(), 2, ct)).toThrow();
+  expect(() => openLive(newDocKey(), doc, 2, ct)).toThrow();
 });

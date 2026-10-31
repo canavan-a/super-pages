@@ -8,11 +8,13 @@ import {
   View,
 } from 'react-native';
 
-import type {HeaderInfo} from '../App';
+import type {HeaderInfo, HeaderViewer} from '../App';
 import {Notice} from '../components/Notice';
+import {b64, newId, unb64} from '../crypto';
 import {DocEditor} from '../editor/DocEditor';
 import type {DocEditorRef} from '../editor/types';
 import {pickImages} from '../files';
+import {colorForTab, Live, startLive, Viewer} from '../live';
 import {
   ConflictError,
   LockedError,
@@ -23,6 +25,7 @@ import {
   uploadImage,
 } from '../pagesStore';
 import type {Route} from '../routes';
+import {session} from '../session';
 import {Theme, useTheme} from '../theme';
 import {roleLabel} from '../components/RolePicker';
 
@@ -32,7 +35,12 @@ const MAX_IMAGE_BYTES = 15 << 20;
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error' | 'conflict';
 
-/** One page, open for reading or editing. Saves as you type. */
+/**
+ * One page, open for reading or editing with whoever else has it open:
+ * their changes and cursors arrive live (live.ts), and it saves as you type.
+ * Saves merge: if someone else saved first, their saved state is merged into
+ * this one and the save goes again.
+ */
 export function DocScreen({
   id,
   fresh,
@@ -55,13 +63,21 @@ export function DocScreen({
   const [generation, setGeneration] = useState(0);
   const editor = useRef<DocEditorRef>(null);
 
-  // What's on screen vs. what the server has.
-  const latest = useRef<string>('');
-  const saved = useRef<string>('');
+  // This open copy of the page, to the others: its id and color.
+  const tab = useRef(newId()).current;
+  const me = session.get()?.me;
+  const user = useMemo(
+    () => ({name: me?.name || 'Someone', color: colorForTab(tab), tab}),
+    [me?.name, tab],
+  );
+  const [viewers, setViewers] = useState<Viewer[]>([]);
+  const live = useRef<Live | null>(null);
+
+  // Edits made here, and how many of them are saved.
+  const edits = useRef(0);
+  const savedEdits = useRef(0);
   // The title, kept apart from the text and edited in the top bar.
   const [title, setTitle] = useState('');
-  const latestTitle = useRef('');
-  const savedTitle = useRef('');
   const base = useRef({version: 0, epoch: 0});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef<Promise<void> | null>(null);
@@ -70,8 +86,7 @@ export function DocScreen({
     setLoadError(null);
     try {
       const o = await openDoc(id);
-      latest.current = saved.current = o.markdown;
-      latestTitle.current = savedTitle.current = o.title;
+      edits.current = savedEdits.current = 0;
       setTitle(o.title);
       base.current = {version: o.doc.version, epoch: o.doc.epoch};
       setOpened(o);
@@ -90,59 +105,69 @@ export function DocScreen({
     load();
   }, [load]);
 
-  const flush = useCallback(async (): Promise<void> => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-      timer.current = null;
-    }
-    if (inFlight.current) await inFlight.current;
-    if (
-      !opened ||
-      (latest.current === saved.current &&
-        latestTitle.current === savedTitle.current)
-    )
-      return;
-    const md = latest.current;
-    const t = latestTitle.current;
-    setSaveState('saving');
-    inFlight.current = (async () => {
-      try {
-        const v = await saveDoc(
-          id,
-          base.current.version,
-          base.current.epoch,
-          opened.key,
-          md,
-          t,
-        );
-        base.current.version = v;
-        saved.current = md;
-        savedTitle.current = t;
-        setSaveError(null);
-        setSaveState(
-          latest.current === md && latestTitle.current === t
-            ? 'saved'
-            : 'dirty',
-        );
-      } catch (e) {
-        if (e instanceof ConflictError) {
-          setSaveState('conflict');
-        } else {
-          setSaveState('error');
-          setSaveError((e as Error).message);
-        }
+  /** Saves, merging in whatever someone else saved first. */
+  const flush = useCallback(
+    async (force = false): Promise<void> => {
+      if (timer.current) {
+        clearTimeout(timer.current);
+        timer.current = null;
       }
-    })();
-    await inFlight.current;
-    inFlight.current = null;
-  }, [id, opened]);
+      if (inFlight.current) await inFlight.current;
+      if (!opened || (!force && edits.current === savedEdits.current)) return;
+      setSaveState('saving');
+      inFlight.current = (async () => {
+        try {
+          for (let tries = 0; ; tries++) {
+            const n = edits.current;
+            const snap = await editor.current!.snapshot();
+            try {
+              const v = await saveDoc(
+                id,
+                base.current.version,
+                base.current.epoch,
+                opened.key,
+                snap.markdown,
+                snap.title,
+                snap.y,
+              );
+              base.current.version = v;
+              savedEdits.current = n;
+              break;
+            } catch (e) {
+              if (!(e instanceof ConflictError) || tries >= 3) throw e;
+              const o = await openDoc(id);
+              if (o.doc.epoch !== base.current.epoch) {
+                // A new key: start again from the page under it. What was
+                // typed here reached the others live already.
+                load();
+                return;
+              }
+              if (!o.y) throw e; // saved by an app without live editing
+              editor.current!.applyChanges([o.y]);
+              base.current.version = o.doc.version;
+            }
+          }
+          setSaveError(null);
+          setSaveState(
+            edits.current === savedEdits.current ? 'saved' : 'dirty',
+          );
+        } catch (e) {
+          if (e instanceof ConflictError) {
+            setSaveState('conflict');
+          } else {
+            setSaveState('error');
+            setSaveError((e as Error).message);
+          }
+        }
+      })();
+      await inFlight.current;
+      inFlight.current = null;
+    },
+    [id, opened, load],
+  );
 
-  const changed = useCallback(() => {
-    if (
-      latest.current === saved.current &&
-      latestTitle.current === savedTitle.current
-    )
-      return;
+  const edited = useCallback(() => {
+    edits.current++;
     setSaveState(s => (s === 'conflict' ? s : 'dirty'));
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
@@ -151,20 +176,63 @@ export function DocScreen({
   }, [flush]);
 
   const onChange = useCallback(
-    (md: string) => {
-      latest.current = md;
-      changed();
+    (_md: string, local: boolean) => {
+      if (local) edited();
     },
-    [changed],
+    [edited],
   );
 
   const onRename = useCallback(
     (t: string) => {
-      latestTitle.current = t;
       setTitle(t);
-      changed();
+      editor.current?.setTitle(t);
+      edited();
     },
-    [changed],
+    [edited],
+  );
+
+  // The live connection, for as long as this copy of the page is open.
+  useEffect(() => {
+    if (!opened) return;
+    const l = startLive({
+      doc: id,
+      key: opened.key,
+      epoch: opened.doc.epoch,
+      tab,
+      onChanges: changes => editor.current?.applyChanges(changes.map(b64)),
+      onViewers: vs => {
+        setViewers(vs);
+        editor.current?.setPeers(
+          vs
+            .filter(v => v.tab !== tab)
+            .map(v => ({tab: v.tab, aware: v.aware ? b64(v.aware) : null})),
+        );
+      },
+      onSaved: (_version, epoch) => {
+        if (epoch > base.current.epoch) flush().then(load);
+      },
+      onReset: () => {
+        openDoc(id)
+          .then(o => o.y && editor.current?.applyChanges([o.y]))
+          .catch(() => {});
+      },
+    });
+    live.current = l;
+    return () => {
+      l.stop();
+      live.current = null;
+    };
+    // flush and load change with opened; the session follows opened alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opened, generation, id, tab]);
+
+  const onLocalChange = useCallback(
+    (u: string) => live.current?.send(unb64(u)),
+    [],
+  );
+  const onAware = useCallback(
+    (a: string) => live.current?.setAware(unb64(a)),
+    [],
   );
 
   // Save before leaving the page or the app.
@@ -185,10 +253,7 @@ export function DocScreen({
     )
       return;
     const warn = (e: BeforeUnloadEvent) => {
-      if (
-        latest.current !== saved.current ||
-        latestTitle.current !== savedTitle.current
-      ) {
+      if (edits.current !== savedEdits.current) {
         flush();
         e.preventDefault();
       }
@@ -197,19 +262,16 @@ export function DocScreen({
     return () => window.removeEventListener('beforeunload', warn);
   }, [flush]);
 
-  /** Someone else saved first: keep what's on screen, on top of their version. */
+  /** Someone saved without live editing (an older app): put this copy over theirs. */
   const keepMine = async () => {
     try {
       const o = await openDoc(id);
       if (o.doc.epoch !== base.current.epoch) {
-        // The key changed too (someone was removed): carry on with the new one.
-        setOpened(o);
+        load();
+        return;
       }
       base.current = {version: o.doc.version, epoch: o.doc.epoch};
-      saved.current = o.markdown;
-      savedTitle.current = o.title;
-      setSaveState('dirty');
-      await flush();
+      await flush(true);
     } catch (e) {
       setSaveError((e as Error).message);
     }
@@ -252,6 +314,27 @@ export function DocScreen({
       ? 'View only'
       : 'Saved';
 
+  // Everyone with the page open, one face per tab (yours included), each
+  // ringed in that tab's cursor color.
+  const here = useMemo((): HeaderViewer[] => {
+    if (!opened) return [];
+    const list = viewers.some(v => v.tab === tab)
+      ? viewers
+      : [{user: me?.id ?? '', tab, aware: null}, ...viewers];
+    return list.map(v => {
+      const m = opened.doc.members.find(x => x.id === v.user);
+      return {
+        key: v.tab,
+        user: v.user,
+        name:
+          (m?.name || 'Someone') +
+          (v.tab === tab ? ' (this tab)' : v.user === me?.id ? ' (you)' : ''),
+        avatar: m?.avatar ?? null,
+        color: colorForTab(v.tab),
+      };
+    });
+  }, [viewers, opened, tab, me?.id]);
+
   useEffect(() => {
     if (!opened) {
       onHeaderChange({title: 'Page'});
@@ -261,7 +344,7 @@ export function DocScreen({
       title: canWrite ? title : title || 'Untitled',
       onRename: canWrite ? onRename : undefined,
       subtitle: status,
-      members: opened.doc.members,
+      viewers: here,
       actions: [
         ...(canWrite
           ? [{label: 'Add image', icon: 'image' as const, onPress: pickImage}]
@@ -279,6 +362,7 @@ export function DocScreen({
     title,
     onRename,
     status,
+    here,
     canWrite,
     pickImage,
     flush,
@@ -364,9 +448,15 @@ export function DocScreen({
         key={generation}
         ref={editor}
         markdown={opened.markdown}
+        y={opened.y}
+        title={opened.title}
+        user={user}
         readOnly={!canWrite}
         autoFocus={fresh}
         onChange={onChange}
+        onTitle={setTitle}
+        onLocalChange={onLocalChange}
+        onAware={onAware}
         onPickImage={pickImage}
         resolveImage={resolveImage}
       />

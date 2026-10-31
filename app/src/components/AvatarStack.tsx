@@ -75,10 +75,85 @@ export function AvatarStack({
   );
 }
 
+/**
+ * Who has a page open: one face per open copy (a person with two tabs shows
+ * twice), each ringed in that copy's cursor color, then a "+N" chip.
+ */
+export function PresenceStack({
+  viewers,
+  size = 28,
+  max = 4,
+}: {
+  viewers: {
+    key: string;
+    user: string;
+    name: string;
+    avatar: string | null;
+    color: string;
+  }[];
+  size?: number;
+  max?: number;
+}): React.JSX.Element | null {
+  const theme = useTheme();
+  if (viewers.length === 0) return null;
+  const shown = viewers.slice(0, viewers.length > max ? max - 1 : max);
+  const extra = viewers.length - shown.length;
+  const overlap = -Math.round(size * 0.28);
+  const ring = 2;
+  return (
+    <View style={styles.row}>
+      {shown.map((v, i) => (
+        <View
+          key={v.key}
+          style={[
+            styles.presence,
+            {
+              marginLeft: i > 0 ? overlap : 0,
+              padding: ring,
+              borderRadius: size / 2 + ring,
+              backgroundColor: v.color,
+            },
+          ]}>
+          <Avatar
+            user={v.user}
+            name={v.name}
+            avatar={v.avatar}
+            size={size - ring * 2}
+            ring={theme.bg}
+          />
+        </View>
+      ))}
+      {extra > 0 && (
+        <View
+          style={[
+            styles.more,
+            {
+              marginLeft: overlap,
+              width: size,
+              height: size,
+              borderRadius: size / 2,
+              backgroundColor: theme.surfaceAlt,
+              borderColor: theme.bg,
+            },
+          ]}>
+          <Text
+            style={[
+              styles.moreText,
+              {color: theme.text, fontSize: size * 0.38},
+            ]}>
+            +{extra}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 const rank = (r: Member['role']) => (r === 'owner' ? 0 : r === 'edit' ? 1 : 2);
 
 const styles = StyleSheet.create({
   row: {flexDirection: 'row', alignItems: 'center'},
   more: {alignItems: 'center', justifyContent: 'center', borderWidth: 2},
   moreText: {fontWeight: '700'},
+  presence: {alignItems: 'center', justifyContent: 'center'},
 });

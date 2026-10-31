@@ -49,6 +49,9 @@ type API struct {
 	readsPerUser  *limiter
 	blobsPerUser  *limiter
 	linksPerIP    *limiter
+	livePerUser   *limiter
+
+	live *liveHub
 }
 
 func New(db *gorm.DB, cfg config.Config, m mail.Mailer) *API {
@@ -77,6 +80,10 @@ func New(db *gorm.DB, cfg config.Config, m mail.Mailer) *API {
 		readsPerUser:  newLimiter(1200, time.Minute),
 		blobsPerUser:  newLimiter(120, time.Hour),
 		linksPerIP:    newLimiter(60, time.Hour),
+		// Live check-ins: a few a second per open tab while typing.
+		livePerUser: newLimiter(3000, time.Minute),
+
+		live: newLiveHub(),
 	}
 }
 
@@ -149,6 +156,7 @@ func (a *API) Router() *gin.Engine {
 	docs.POST("/docs", a.rateLimit(a.writesPerUser, byUser), a.createDoc)
 	docs.PUT("/docs/:id", a.rateLimit(a.writesPerUser, byUser), a.saveDoc)
 	docs.POST("/docs/:id/rekey", a.rateLimit(a.writesPerUser, byUser), a.rekeyDoc)
+	docs.POST("/docs/:id/live", a.rateLimit(a.livePerUser, byUser), a.liveCheckIn)
 
 	blobs := v1.Group("", a.requireSignature(a.cfg.MaxBlobBytes), a.requireUser)
 	blobs.PUT("/me/avatar", a.rateLimit(a.blobsPerUser, byUser), a.putAvatar)

@@ -76,13 +76,35 @@ Each document has a random 32-byte **document key** per **epoch**, sealed to
 each member's box key with associated data `sp-dockey|<doc>`.
 
 - `head_ct` = seal(key, JSON `{title, snippet}`, ad `sp-head|<doc>|<epoch>`):
-  what the grid shows, without fetching bodies.
-- `body_ct` = seal(key, markdown, ad `sp-body|<doc>|<epoch>`).
+  what the grid shows, without fetching bodies. The title is the page's
+  own, set apart from its text.
+- `body_ct` = seal(key, body, ad `sp-body|<doc>|<epoch>`). The body is JSON
+  `{"v":2,"md":<markdown>,"y":<b64 Yjs state>}`: the shared editing state
+  (the text as the XML fragment `default`, the title as the text `title`),
+  with the markdown beside it. Pages saved before live editing are the
+  markdown alone; an app opening one builds the Yjs state from it under the
+  fixed client id 1, so every app builds the same state and the copies merge.
 - Each save is signed: Ed25519(`sp-doc` ‖ `<doc>|<version>|<epoch>|hex(sha256(head_ct))|hex(sha256(body_ct))`)
   by the writer; the server checks it and keeps it, and readers check it
   against the writer's `sign_pub`.
 - Saves name the version they started from (`base_version`). If someone
-  else saved first, the server answers 409 with the current version.
+  else saved first, the server answers 409 with the current version; the app
+  merges that saved state into its own (Yjs states always merge) and saves
+  again.
+
+**Live editing.** Every open copy of a page (each tab, each device) checks
+in with `POST /v1/docs/:id/live {tab, since, gen, wait, hidden, aware,
+updates}`, with a random tab id. `updates` are the Yjs updates typed there
+and `aware` is its Yjs awareness state (its cursor, name and color), each
+sealed under the document key with ad `sp-live|<doc>|<epoch>`. The server
+keeps, in memory only: who is there (dropped after 20s without a check-in,
+100s for a hidden tab), each tab's latest `aware`, and the updates of the
+last 3 minutes, numbered. It answers with the updates after `since` from
+other tabs, everyone there, and the saved version and epoch; with `wait`,
+it holds the answer up to 20s until something happens. A tab that fell
+behind the buffer is told to `reset` and merges the saved page in again.
+View members can check in but not send updates. Each tab saves what was
+typed in it, so nothing outlives the buffer unsaved.
 
 **Images** are sealed under their own random key (ad `sp-blob`), uploaded as
 blobs of the document, and referenced in the markdown as
@@ -126,7 +148,8 @@ rekeys it (`shares/todo`).
 
 Email addresses, names, profile pictures (plaintext, shown to collaborators),
 public keys, locked bundles, who is in which document with which role, sizes
-and times. Never: passphrases, entropy, document keys, titles, text or images.
+and times, and who has which page open right now. Never: passphrases,
+entropy, document keys, titles, text, images or where anyone's cursor is.
 
 Other users' email addresses are never in any response; only `GET /v1/me`
 returns the caller's own. Every email route is rate limited (see

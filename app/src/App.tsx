@@ -23,7 +23,7 @@ import {
 
 import {api, Me, Member} from './api';
 import {useThemedAppIcon} from './appIcon';
-import {AvatarStack} from './components/AvatarStack';
+import {AvatarStack, PresenceStack} from './components/AvatarStack';
 import {CrashScreen} from './components/CrashScreen';
 import {Icon, IconName} from './components/Icon';
 import {PixelField} from './components/PixelField';
@@ -60,6 +60,16 @@ const TITLES: Record<Route['name'], string> = {
 
 // Screens report their own title/subtitle/actions up here so they render in
 // the one top bar.
+/** One open copy of the page (a tab, a device), shown as its person's face. */
+export interface HeaderViewer {
+  key: string;
+  user: string;
+  name: string;
+  avatar: string | null;
+  /** Its cursor color, drawn as a ring around the face. */
+  color: string;
+}
+
 export interface HeaderInfo {
   title: string;
   /** Makes the title an input (shown as "Untitled" while empty); called as it's typed. */
@@ -67,6 +77,8 @@ export interface HeaderInfo {
   subtitle?: string;
   /** Who the page is shared with, drawn as a cluster beside the actions. */
   members?: Member[];
+  /** Who has the page open right now; shown instead of members. */
+  viewers?: HeaderViewer[];
   actions?: {label: string; onPress: () => void; icon: IconName}[];
 }
 
@@ -320,7 +332,20 @@ function AppInner({
             </Text>
           ) : null}
         </View>
-        {showDocHeader && headerInfo!.members && (
+        {showDocHeader && headerInfo!.viewers ? (
+          <Pressable
+            style={styles.headerStack}
+            onPress={() =>
+              route.name === 'doc' &&
+              navigate({name: 'docSettings', id: route.id})
+            }
+            accessibilityLabel={`Open now: ${headerInfo!.viewers
+              .map(v => v.name)
+              .join(', ')}`}>
+            <PresenceStack viewers={headerInfo!.viewers} size={28} />
+          </Pressable>
+        ) : null}
+        {showDocHeader && !headerInfo!.viewers && headerInfo!.members && (
           <Pressable
             style={styles.headerStack}
             onPress={() =>
@@ -450,7 +475,6 @@ const styles2 = StyleSheet.create({
     margin: 0,
     borderWidth: 0,
     minWidth: 0,
-    outlineWidth: 0,
   },
 });
 
