@@ -20,7 +20,7 @@ type Config struct {
 	AndroidCertSHA256 []string
 	MaxBlobBytes      int64
 	// TrustProxy keys rate limits on the rightmost X-Forwarded-For entry of
-	// requests arriving over loopback (Pangolin/newt, cloudflared). See
+	// requests arriving over loopback (the Super Matrix relay, cloudflared). See
 	// api.clientIP.
 	TrustProxy bool
 	// StaticDir, when set, serves the built web client on the same listener
@@ -37,12 +37,10 @@ type Config struct {
 	// only: anyone who can read the log can sign in as anyone.
 	LogCodes bool
 
-	// RequireRegCode makes new accounts give a registration code
-	// (superpages-admin codes create). On by default while in pre-release.
-	RequireRegCode bool
-	// ShareInvitesBypassCode lets an email that someone shared a document
-	// with sign up without a code.
-	ShareInvitesBypassCode bool
+	// PrereleaseCode, when set, is the one invite code an address without
+	// an account must give before a sign-in code is emailed to it. Existing
+	// accounts sign in without it. Matching ignores case, spaces and dashes.
+	PrereleaseCode string
 }
 
 func Load() Config {
@@ -50,22 +48,21 @@ func Load() Config {
 	maxMB, _ := strconv.Atoi(getEnv("SUPERPAGES_MAX_BLOB_MB", "25"))
 	smtpPort, _ := strconv.Atoi(getEnv("SUPERPAGES_SMTP_PORT", "587"))
 	return Config{
-		ListenAddr:             getEnv("SUPERPAGES_LISTEN_ADDR", ":8080"),
-		DataDir:                dataDir,
-		DBPath:                 getEnv("SUPERPAGES_DB_PATH", filepath.Join(dataDir, "superpages.db")),
-		BlobDir:                filepath.Join(dataDir, "blobs"),
-		PublicOrigin:           strings.TrimRight(os.Getenv("SUPERPAGES_PUBLIC_ORIGIN"), "/"),
-		AndroidCertSHA256:      splitList(os.Getenv("SUPERPAGES_ANDROID_CERT_SHA256")),
-		MaxBlobBytes:           int64(maxMB) << 20,
-		TrustProxy:             os.Getenv("SUPERPAGES_TRUST_PROXY") == "1",
-		StaticDir:              os.Getenv("SUPERPAGES_STATIC_DIR"),
-		SMTPHost:               getEnv("SUPERPAGES_SMTP_HOST", "smtp.gmail.com"),
-		SMTPPort:               smtpPort,
-		SMTPEmail:              os.Getenv("SUPERPAGES_SMTP_EMAIL"),
-		SMTPAppPassword:        os.Getenv("SUPERPAGES_SMTP_APP_PASSWORD"),
-		LogCodes:               os.Getenv("SUPERPAGES_LOG_CODES") == "1",
-		RequireRegCode:         getEnv("SUPERPAGES_REQUIRE_REG_CODE", "1") == "1",
-		ShareInvitesBypassCode: getEnv("SUPERPAGES_SHARE_INVITES_BYPASS_CODE", "1") == "1",
+		ListenAddr:        getEnv("SUPERPAGES_LISTEN_ADDR", ":8080"),
+		DataDir:           dataDir,
+		DBPath:            getEnv("SUPERPAGES_DB_PATH", filepath.Join(dataDir, "superpages.db")),
+		BlobDir:           filepath.Join(dataDir, "blobs"),
+		PublicOrigin:      strings.TrimRight(os.Getenv("SUPERPAGES_PUBLIC_ORIGIN"), "/"),
+		AndroidCertSHA256: splitList(os.Getenv("SUPERPAGES_ANDROID_CERT_SHA256")),
+		MaxBlobBytes:      int64(maxMB) << 20,
+		TrustProxy:        os.Getenv("SUPERPAGES_TRUST_PROXY") == "1",
+		StaticDir:         os.Getenv("SUPERPAGES_STATIC_DIR"),
+		SMTPHost:          getEnv("SUPERPAGES_SMTP_HOST", "smtp.gmail.com"),
+		SMTPPort:          smtpPort,
+		SMTPEmail:         os.Getenv("SUPERPAGES_SMTP_EMAIL"),
+		SMTPAppPassword:   os.Getenv("SUPERPAGES_SMTP_APP_PASSWORD"),
+		LogCodes:          os.Getenv("SUPERPAGES_LOG_CODES") == "1",
+		PrereleaseCode:    strings.TrimSpace(os.Getenv("SUPERPAGES_PRERELEASE_CODE")),
 	}
 }
 

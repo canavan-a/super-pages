@@ -21,7 +21,7 @@ var ErrOff = errors.New("email isn't set up on this server")
 type Mailer interface {
 	Ready() bool
 	SendCode(to, code string) error
-	SendShareNotice(to, fromName, origin string) error
+	SendShareNotice(to, fromName, origin string, needsInvite bool) error
 }
 
 type Sender struct {
@@ -64,7 +64,9 @@ func (s *Sender) SendCode(to, code string) error {
 
 // SendShareNotice tells someone without an account that a page was shared
 // with them. It carries no document content, only who and where to go.
-func (s *Sender) SendShareNotice(to, fromName, origin string) error {
+// needsInvite says signing up takes the pre-release code, which this email
+// doesn't carry: the sharer has to pass it on.
+func (s *Sender) SendShareNotice(to, fromName, origin string, needsInvite bool) error {
 	if !s.configured() {
 		if s.logCodes {
 			log.Printf("share notice for %s from %q (SMTP not configured)", otp.Mask(to), fromName)
@@ -79,11 +81,15 @@ func (s *Sender) SendShareNotice(to, fromName, origin string) error {
 	if link == "" {
 		link = "https://pages.superbadger.io"
 	}
+	invite := ""
+	if needsInvite {
+		invite = fmt.Sprintf(" Super Pages is in pre-release, so you'll need the invite code: ask %s for it.", html.EscapeString(fromName))
+	}
 	return s.send(to, fmt.Sprintf("%s shared a page with you on Super Pages", fromName), fmt.Sprintf(`
         <p><b>%s</b> shared a page with you on Super Pages.</p>
-        <p><a href="%s">Sign in with this email address</a> to open it. No invite code needed.</p>
+        <p><a href="%s">Sign up with this email address</a> to open it.%s</p>
         <p>Pages are end-to-end encrypted; this email doesn't contain any of it.</p>
-    `, html.EscapeString(fromName), html.EscapeString(link)))
+    `, html.EscapeString(fromName), html.EscapeString(link), invite))
 }
 
 func (s *Sender) send(to, subject, body string) error {

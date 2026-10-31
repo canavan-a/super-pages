@@ -1,11 +1,14 @@
 package api
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -15,7 +18,6 @@ import (
 	"main/database"
 	"main/otp"
 	"main/proto"
-	"main/regcode"
 )
 
 const (
@@ -26,12 +28,15 @@ const (
 
 // ---- email codes ----
 
-// emailStart sends a sign-in code. The answer is the same whether or not the
-// address has an account, and the email goes out in the background, so this
-// can't be used to find out who's signed up.
+// emailStart sends a sign-in code, in the background. With a pre-release
+// code set, an address without an account must give it first, so the answer
+// does say whether an address has an account: the codeSend limits (per IP,
+// per address, per day) keep that to a trickle, and wrong codes are capped
+// separately.
 func (a *API) emailStart(c *gin.Context) {
 	var req struct {
-		Email string `json:"email"`
+		Email      string `json:"email"`
+		InviteCode string `json:"invite_code"`
 	}
 	if !bindJSON(c, &req) {
 		return
@@ -45,10 +50,16 @@ func (a *API) emailStart(c *gin.Context) {
 		abort(c, http.StatusServiceUnavailable, "email sign-in isn't set up on this server yet")
 		return
 	}
-	if !a.limit(c, a.codeSendPerIP, a.clientIP(c)) || !a.limit(c, a.codeSendPerEmail, email) || !a.limit(c, a.codeSendAll, "all") {
+	ip := a.clientIP(c)
+	if !a.limit(c, a.codeSendPerIP, ip) || !a.limit(c, a.codeSendPerIPDay, ip) ||
+		!a.limit(c, a.codeSendPerEmail, email) || !a.limit(c, a.codeSendAll, "all") {
 		return
 	}
-	code, err := a.otp.NewCode(email, a.now())
+	admitted, ok := a.admit(c, email, req.InviteCode)
+	if !ok {
+		return
+	}
+	code, err := a.otp.NewCode(email, admitted, a.now())
 	if err != nil {
 		abort(c, http.StatusInternalServerError, "couldn't make a code")
 		return
@@ -59,6 +70,55 @@ func (a *API) emailStart(c *gin.Context) {
 		}
 	}()
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// admit decides whether email may get a sign-in code, and whether that
+// sign-in may make a new account. It has answered (403 or 429) when ok is
+// false.
+func (a *API) admit(c *gin.Context, email, invite string) (admitted, ok bool) {
+	if a.cfg.PrereleaseCode == "" {
+		return true, true
+	}
+	var n int64
+	if err := a.db.Model(&database.User{}).Where("email = ?", email).Count(&n).Error; err != nil {
+		dbError(c, err)
+		return false, false
+	}
+	if n > 0 {
+		// Signing in to an existing account: no code, and no new account.
+		return false, true
+	}
+	if strings.TrimSpace(invite) == "" {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "new accounts need the pre-release invite code", "code": "prerelease"})
+		return false, false
+	}
+	ip, now := a.clientIP(c), a.now()
+	if a.inviteFailPerIP.full(ip, now) || a.inviteFailAll.full("all", now) {
+		c.Header("Retry-After", strconv.Itoa(a.inviteFailPerIP.retryAfter(ip, now)))
+		abort(c, http.StatusTooManyRequests, "too many wrong invite codes; wait a bit and try again")
+		return false, false
+	}
+	// Hashed so the comparison doesn't depend on the code's length.
+	got, want := sha256.Sum256([]byte(normalizeInvite(invite))), sha256.Sum256([]byte(normalizeInvite(a.cfg.PrereleaseCode)))
+	if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		a.inviteFailPerIP.allow(ip, now)
+		a.inviteFailAll.allow("all", now)
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "that invite code isn't right", "code": "prerelease"})
+		return false, false
+	}
+	return true, true
+}
+
+// normalizeInvite ignores case, spaces and dashes, so "Scroll Badger" matches
+// SCROLL-BADGER.
+func normalizeInvite(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(s) {
+		if r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // emailVerify trades a code for a ticket. For an existing account it also
@@ -77,11 +137,12 @@ func (a *API) emailVerify(c *gin.Context) {
 	}
 	email := otp.NormalizeEmail(req.Email)
 	code := strings.Join(strings.Fields(req.Code), "")
-	if email == "" || !a.otp.Check(email, code, a.now()) {
+	ok, admitted := a.otp.Check(email, code, a.now())
+	if email == "" || !ok {
 		abort(c, http.StatusUnauthorized, "that code is wrong or has expired")
 		return
 	}
-	resp := gin.H{"ticket": a.otp.NewTicket(email, a.now())}
+	resp := gin.H{"ticket": a.otp.NewTicket(email, admitted, a.now())}
 	var u database.User
 	err := a.db.Where("email = ?", email).Take(&u).Error
 	switch {
@@ -89,7 +150,6 @@ func (a *API) emailVerify(c *gin.Context) {
 		resp["account"] = gin.H{"bundle": u.KeyBundle, "sign_pub": u.SignPub, "key_gen": u.KeyGen}
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		resp["account"] = nil
-		resp["needs_code"] = a.needsRegCode(email)
 	default:
 		dbError(c, err)
 		return
@@ -97,51 +157,36 @@ func (a *API) emailVerify(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// needsRegCode reports whether email has to give a registration code to sign
-// up: always when codes are required, unless someone shared a page with it.
-func (a *API) needsRegCode(email string) bool {
-	if !a.cfg.RequireRegCode {
-		return false
-	}
-	if !a.cfg.ShareInvitesBypassCode {
-		return true
-	}
-	var n int64
-	a.db.Model(&database.PendingShare{}).Where("email = ?", email).Count(&n)
-	return n == 0
-}
-
 // ---- accounts ----
 
 type newKeys struct {
-	Ticket  string `json:"ticket"`
-	RegCode string `json:"reg_code"`
-	BoxPub  string `json:"box_pub"`
-	Bundle  string `json:"bundle"`
-	Name    string `json:"name"`
+	Ticket string `json:"ticket"`
+	BoxPub string `json:"box_pub"`
+	Bundle string `json:"bundle"`
+	Name   string `json:"name"`
 }
 
 // keysFromRequest checks the parts of a create or reset that don't touch
 // the database. The request is signed by the new signing key, which proves
 // the caller holds it.
-func (a *API) keysFromRequest(c *gin.Context, req *newKeys) (email string, ok bool) {
+func (a *API) keysFromRequest(c *gin.Context, req *newKeys) (email string, admitted, ok bool) {
 	if !a.limit(c, a.accountPerIP, a.clientIP(c)) {
-		return "", false
+		return "", false, false
 	}
-	email = a.otp.TicketEmail(req.Ticket, a.now())
+	email, admitted = a.otp.Ticket(req.Ticket, a.now())
 	if email == "" {
 		abort(c, http.StatusUnauthorized, "this sign-in has expired; ask for a new code")
-		return "", false
+		return "", false, false
 	}
 	if !proto.IsKey(req.BoxPub) || req.Bundle == "" || len(req.Bundle) > maxBundleLen {
 		abort(c, http.StatusBadRequest, "bad keys")
-		return "", false
+		return "", false, false
 	}
 	if _, err := proto.ParseKeyID(c.GetString("key")); err != nil {
 		abort(c, http.StatusBadRequest, "bad keys")
-		return "", false
+		return "", false, false
 	}
-	return email, true
+	return email, admitted, true
 }
 
 func cleanName(s string) (string, bool) {
@@ -154,8 +199,14 @@ func (a *API) createAccount(c *gin.Context) {
 	if !bindBody(c, &req) {
 		return
 	}
-	email, ok := a.keysFromRequest(c, &req)
+	email, admitted, ok := a.keysFromRequest(c, &req)
 	if !ok {
+		return
+	}
+	// The pre-release code was checked when the sign-in code was sent; a
+	// sign-in that started as an existing account can't make a new one.
+	if !admitted {
+		abort(c, http.StatusForbidden, "start again with the pre-release invite code")
 		return
 	}
 	name, ok := cleanName(req.Name)
@@ -163,8 +214,6 @@ func (a *API) createAccount(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "names are at most 64 characters")
 		return
 	}
-	// Decided before the transaction: there is one database connection.
-	needsCode := a.needsRegCode(email)
 	now := a.now()
 	u := database.User{
 		ID: proto.NewID(), SignPub: c.GetString("key"), BoxPub: req.BoxPub, Email: email,
@@ -178,21 +227,11 @@ func (a *API) createAccount(c *gin.Context) {
 		if n > 0 {
 			return errExists
 		}
-		if err := tx.Create(&u).Error; err != nil {
-			return err
-		}
-		if needsCode {
-			return regcode.Redeem(tx, req.RegCode, u.ID, now)
-		}
-		return nil
+		return tx.Create(&u).Error
 	})
 	switch {
 	case errors.Is(err, errExists):
 		abort(c, http.StatusConflict, "there's already an account for this email")
-		return
-	case errors.Is(err, regcode.ErrInvalid):
-		a.otp.FailTicket(req.Ticket)
-		abort(c, http.StatusForbidden, regcode.ErrInvalid.Error())
 		return
 	case err != nil:
 		dbError(c, err)
@@ -214,7 +253,7 @@ func (a *API) resetAccount(c *gin.Context) {
 	if !bindBody(c, &req) {
 		return
 	}
-	email, ok := a.keysFromRequest(c, &req)
+	email, _, ok := a.keysFromRequest(c, &req)
 	if !ok {
 		return
 	}

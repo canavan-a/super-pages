@@ -43,7 +43,6 @@ export type Done = (server: string, entropy: Uint8Array, me: Me) => void;
 type Step =
   | {name: 'email'}
   | {name: 'code'}
-  | {name: 'regcode'}
   | {name: 'profile'}
   | {name: 'newPass'}
   | {name: 'phrase'; account: Account; me: Me}
@@ -75,7 +74,10 @@ export function OnboardingScreen({
   const [email, setEmail] = useState(initialEmail ?? '');
   const [code, setCode] = useState('');
   const [verified, setVerified] = useState<VerifyResult | null>(null);
-  const [regCode, setRegCode] = useState('');
+  // The pre-release invite code: only new accounts need it, and only while
+  // the server asks for one (ServerConfig.prerelease).
+  const [inviteCode, setInviteCode] = useState('');
+  const [prerelease, setPrerelease] = useState(false);
   const [name, setName] = useState('');
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +90,17 @@ export function OnboardingScreen({
     if (Platform.OS === 'web') setServer(homeServer());
   }, []);
 
+  useEffect(() => {
+    let live = true;
+    api
+      .config(server)
+      .then(cfg => live && setPrerelease(!!cfg.prerelease))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [server]);
+
   const go = (s: Step) => {
     setError(null);
     setBusy(null);
@@ -97,12 +110,9 @@ export function OnboardingScreen({
   const back: Step | null = (() => {
     switch (step.name) {
       case 'code':
-        return {name: 'email'};
-      case 'regcode':
       case 'unlock':
-        return {name: 'email'};
       case 'profile':
-        return verified?.needs_code ? {name: 'regcode'} : {name: 'email'};
+        return {name: 'email'};
       case 'newPass':
         return {name: 'profile'};
       case 'recover':
@@ -153,7 +163,13 @@ export function OnboardingScreen({
         throw new Error(
           `${server.replace(/^https?:\/\//, '')} isn't a Super Pages server.`,
         );
-      await api.emailStart(server, email.trim());
+      try {
+        await api.emailStart(server, email.trim(), inviteCode.trim());
+      } catch (e) {
+        if (e instanceof ApiError && e.body?.code === 'prerelease')
+          setPrerelease(true);
+        throw e;
+      }
       setCode('');
       go({name: 'code'});
     });
@@ -163,7 +179,7 @@ export function OnboardingScreen({
       const v = await api.emailVerify(server, email.trim(), c);
       setVerified(v);
       if (v.account) go({name: 'unlock'});
-      else go({name: v.needs_code ? 'regcode' : 'profile'});
+      else go({name: 'profile'});
     });
 
   const create = (pass: string) =>
@@ -173,19 +189,13 @@ export function OnboardingScreen({
       try {
         const me = await api.createAccount(server, account, {
           ticket: verified!.ticket,
-          reg_code: regCode.trim(),
           box_pub: b64(account.xPub),
           bundle,
           name: name.trim(),
         });
         go({name: 'phrase', account, me});
       } catch (e) {
-        if (e instanceof ApiError && e.status === 403) {
-          go({name: 'regcode'});
-          setError(e.message);
-          return;
-        }
-        if (e instanceof ApiError && e.status === 401) {
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
           go({name: 'email'});
           setError(e.message);
           return;
@@ -293,6 +303,25 @@ export function OnboardingScreen({
             onSubmitEditing={() => /@/.test(email) && sendCode()}
             editable={!busy}
           />
+          {prerelease && (
+            <>
+              <TextInput
+                style={styles.input}
+                value={inviteCode}
+                onChangeText={setInviteCode}
+                placeholder="Pre-release invite code"
+                placeholderTextColor={theme.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                onSubmitEditing={() => /@/.test(email) && sendCode()}
+                editable={!busy}
+              />
+              <Text style={styles.hint}>
+                Only needed for a new account. Super Pages is invite-only for
+                now.
+              </Text>
+            </>
+          )}
           <Pressable
             style={[
               styles.primary,
@@ -369,36 +398,6 @@ export function OnboardingScreen({
           </Pressable>
           <Pressable style={styles.quiet} onPress={sendCode} disabled={!!busy}>
             <Text style={styles.quietText}>Send a new code</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {step.name === 'regcode' && (
-        <View>
-          <Text style={styles.h1}>Enter your invite code</Text>
-          <Text style={styles.body}>
-            Super Pages is in early access. You need an invite code to make an
-            account.
-          </Text>
-          <TextInput
-            style={[styles.input, styles.codeInput]}
-            value={regCode}
-            onChangeText={t => setRegCode(t.toUpperCase())}
-            placeholder="XXXX-XXXX-XXXX"
-            placeholderTextColor={theme.textMuted}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            editable={!busy}
-          />
-          <Pressable
-            style={[
-              styles.primary,
-              regCode.replace(/[^A-Za-z0-9]/g, '').length < 12 &&
-                styles.disabled,
-            ]}
-            disabled={regCode.replace(/[^A-Za-z0-9]/g, '').length < 12}
-            onPress={() => go({name: 'profile'})}>
-            <Text style={styles.primaryText}>Continue</Text>
           </Pressable>
         </View>
       )}

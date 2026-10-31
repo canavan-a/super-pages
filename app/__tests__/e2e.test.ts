@@ -1,5 +1,5 @@
-// End to end against a real server: sign-up with email codes and an invite
-// code, encrypted pages, sharing by email (to someone who signs up later),
+// End to end against a real server: sign-up with email codes and the
+// pre-release invite code, encrypted pages, sharing by email (to someone who signs up later),
 // share links, roles, and removing someone. Runs the Go server from
 // ../server, so it only runs with E2E=1 (see run-tests in flake.nix).
 import {ChildProcess, execFileSync, spawn} from 'child_process';
@@ -52,19 +52,20 @@ async function codeFor(email: string): Promise<string> {
   throw new Error(`no code for ${email}`);
 }
 
-async function signUp(email: string, name: string, regCode = '') {
-  await api.emailStart(SERVER, email);
+const INVITE = 'Scroll Badger';
+
+async function signUp(email: string, name: string, invite = INVITE) {
+  await api.emailStart(SERVER, email, invite);
   const v = await api.emailVerify(SERVER, email, await codeFor(email));
   expect(v.account).toBeNull();
   const account = newAccount();
   const me = await api.createAccount(SERVER, account, {
     ticket: v.ticket,
-    reg_code: regCode,
     box_pub: b64(account.xPub),
     bundle: await lockBundle(account.entropy, `${name} passphrase`, FAST),
     name,
   });
-  return {account, me, email, needsCode: v.needs_code};
+  return {account, me, email};
 }
 
 function as(u: {account: {entropy: Uint8Array}; me: any}) {
@@ -82,15 +83,11 @@ run('end to end', () => {
       SUPERPAGES_LISTEN_ADDR: `127.0.0.1:${PORT}`,
       SUPERPAGES_DATA_DIR: dataDir,
       SUPERPAGES_LOG_CODES: '1',
+      SUPERPAGES_PRERELEASE_CODE: INVITE,
     };
     execFileSync(
       'go',
       ['build', '-o', join(dataDir, 'srv'), './cmd/superpages-server'],
-      {cwd: serverDir, env},
-    );
-    execFileSync(
-      'go',
-      ['build', '-o', join(dataDir, 'admin'), './cmd/superpages-admin'],
       {cwd: serverDir, env},
     );
     proc = spawn(join(dataDir, 'srv'), [], {env, cwd: dataDir});
@@ -112,38 +109,17 @@ run('end to end', () => {
   });
 
   it('works', async () => {
-    const env = {...process.env, SUPERPAGES_DATA_DIR: dataDir};
-    const regCode = execFileSync(
-      join(dataDir, 'admin'),
-      ['codes', 'create', '--uses', '2', '--label', 'e2e'],
-      {env},
-    )
-      .toString()
-      .split('\n')[0]
-      .trim();
-    expect(regCode).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-
-    // Signing up without an invite code is refused.
-    await api.emailStart(SERVER, 'nobody@example.com');
-    const v = await api.emailVerify(
-      SERVER,
-      'nobody@example.com',
-      await codeFor('nobody@example.com'),
-    );
-    expect(v.needs_code).toBe(true);
-    const stranger = newAccount();
+    // The server says it's invite-only, and a new address with a wrong code
+    // gets no sign-in code. (Every request here is from one IP, which may
+    // ask for 5 codes per 10 minutes, so the Go tests cover the rest.)
+    expect((await api.config(SERVER)).prerelease).toBe(true);
     await expect(
-      api.createAccount(SERVER, stranger, {
-        ticket: v.ticket,
-        reg_code: '',
-        box_pub: b64(stranger.xPub),
-        bundle: 'x',
-        name: 'x',
-      }),
-    ).rejects.toMatchObject({status: 403});
+      api.emailStart(SERVER, 'nobody@example.com', 'wrong'),
+    ).rejects.toMatchObject({status: 403, body: {code: 'prerelease'}});
+    expect(log).not.toMatch(/sign-in code for nobody@/);
 
-    const alice = await signUp('alice@example.com', 'Alice', regCode);
-    const carol = await signUp('carol@example.com', 'Carol', regCode);
+    const alice = await signUp('alice@example.com', 'Alice', 'scroll-badger');
+    const carol = await signUp('carol@example.com', 'Carol');
 
     // Alice writes a page.
     as(alice);
@@ -167,9 +143,8 @@ run('end to end', () => {
     const r = await store.shareByEmail(id, 'bob@example.com', 'edit');
     expect(r.kind).toBe('pending');
 
-    // Bob signs up; the share counts as his invitation.
+    // Bob signs up (with the invite code Alice passes on).
     const bob = await signUp('bob@example.com', 'Bob');
-    expect(bob.needsCode).toBe(false);
     as(bob);
     await store.refreshDocs();
     // Nothing yet: only a key holder can finish the share.
@@ -233,7 +208,8 @@ run('end to end', () => {
     expect((await store.openDoc(id)).doc.epoch).toBe(2);
 
     // A new device: the email code returns the locked bundle, the passphrase opens it.
-    await api.emailStart(SERVER, 'alice@example.com');
+    // An existing account signs in on a new device without the invite code.
+    await api.emailStart(SERVER, 'alice@example.com', '');
     const again = await api.emailVerify(
       SERVER,
       'alice@example.com',

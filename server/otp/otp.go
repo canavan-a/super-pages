@@ -23,20 +23,21 @@ const (
 	// TicketTTL is how long a verified email has to finish signing up (set
 	// a passphrase, write down the recovery phrase) or reset.
 	TicketTTL = 30 * time.Minute
-	// TicketAttempts caps wrong registration codes per ticket.
-	TicketAttempts = 5
 )
 
+// admitted, on a code and the ticket it turns into, says the sign-in may
+// make a new account: it gave the pre-release code, or none is needed.
 type code struct {
-	hash    [32]byte
-	expires time.Time
-	tries   int
+	hash     [32]byte
+	expires  time.Time
+	tries    int
+	admitted bool
 }
 
 type ticket struct {
-	email   string
-	expires time.Time
-	tries   int
+	email    string
+	expires  time.Time
+	admitted bool
 }
 
 type Store struct {
@@ -52,7 +53,7 @@ func NewStore() *Store {
 func hashCode(email, c string) [32]byte { return sha256.Sum256([]byte(email + "\x00" + c)) }
 
 // NewCode makes a 6-digit code for email, replacing any earlier one.
-func (s *Store) NewCode(email string, now time.Time) (string, error) {
+func (s *Store) NewCode(email string, admitted bool, now time.Time) (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
 	if err != nil {
 		return "", err
@@ -61,63 +62,55 @@ func (s *Store) NewCode(email string, now time.Time) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep(now)
-	s.codes[email] = &code{hash: hashCode(email, c), expires: now.Add(CodeTTL)}
+	s.codes[email] = &code{hash: hashCode(email, c), expires: now.Add(CodeTTL), admitted: admitted}
 	return c, nil
 }
 
-// Check uses up a code if it matches. A code dies after CodeAttempts wrong
-// guesses or CodeTTL.
-func (s *Store) Check(email, c string, now time.Time) bool {
+// Check uses up a code if it matches, and says whether it was admitted. A
+// code dies after CodeAttempts wrong guesses or CodeTTL.
+func (s *Store) Check(email, c string, now time.Time) (ok, admitted bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.codes[email]
 	if cur == nil {
-		return false
+		return false, false
 	}
 	if now.After(cur.expires) {
 		delete(s.codes, email)
-		return false
+		return false, false
 	}
 	h := hashCode(email, c)
 	if subtle.ConstantTimeCompare(h[:], cur.hash[:]) == 1 {
 		delete(s.codes, email)
-		return true
+		return true, cur.admitted
 	}
 	cur.tries++
 	if cur.tries >= CodeAttempts {
 		delete(s.codes, email)
 	}
-	return false
+	return false, false
 }
 
 // NewTicket issues a ticket proving email was verified just now.
-func (s *Store) NewTicket(email string, now time.Time) string {
+func (s *Store) NewTicket(email string, admitted bool, now time.Time) string {
 	t := proto.NewSecret()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep(now)
-	s.tickets[sha256.Sum256([]byte(t))] = &ticket{email: email, expires: now.Add(TicketTTL)}
+	s.tickets[sha256.Sum256([]byte(t))] = &ticket{email: email, expires: now.Add(TicketTTL), admitted: admitted}
 	return t
 }
 
-// TicketEmail returns the email a live ticket was issued for, or "".
-func (s *Store) TicketEmail(t string, now time.Time) string {
+// Ticket returns the email a live ticket was issued for ("" if none) and
+// whether it may make a new account.
+func (s *Store) Ticket(t string, now time.Time) (email string, admitted bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.tickets[sha256.Sum256([]byte(t))]
-	if cur == nil || now.After(cur.expires) || cur.tries >= TicketAttempts {
-		return ""
+	if cur == nil || now.After(cur.expires) {
+		return "", false
 	}
-	return cur.email
-}
-
-// FailTicket counts a wrong registration code against a ticket.
-func (s *Store) FailTicket(t string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if cur := s.tickets[sha256.Sum256([]byte(t))]; cur != nil {
-		cur.tries++
-	}
+	return cur.email, cur.admitted
 }
 
 // UseTicket spends a ticket.

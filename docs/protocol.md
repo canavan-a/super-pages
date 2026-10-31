@@ -34,18 +34,21 @@ passphrase never leaves the device, so the server can't open it.
 
 Sign-in is by email only:
 
-1. `POST /v1/auth/email/start {email}` emails a 6-digit code (10 minutes, 5
-   tries, only its hash kept in memory). Same answer whether or not the
-   address has an account.
+1. `POST /v1/auth/email/start {email, invite_code}` emails a 6-digit code
+   (10 minutes, 5 tries, only its hash kept in memory). While the server has
+   a pre-release code (`SUPERPAGES_PRERELEASE_CODE`, one shared code;
+   `GET /v1/config` says `prerelease`), an address without an account must
+   send it as `invite_code` (case, spaces and dashes don't matter), or gets
+   403 `{code: "prerelease"}` and no email. Existing accounts don't need it.
+   That 403 does say an address has no account, so this route is limited per
+   IP (5 per 10 minutes, 30 a day), per address and overall, and wrong
+   invite codes are capped separately (5 an hour per IP, 100 an hour in all).
 2. `POST /v1/auth/email/verify {email, code}` returns a **ticket** (single
    use, 30 minutes), and for an existing account its `bundle` and `sign_pub`.
-   For a new address it says whether a registration code is needed
-   (`needs_code`).
 3. New account: the app makes entropy, locks the bundle with the chosen
-   passphrase and sends `POST /v1/accounts {ticket, reg_code, box_pub,
-   bundle, name}`, signed by the new signing key. The registration code is
-   checked here (a pending share to the address stands in for one, unless
-   the server turns that off).
+   passphrase and sends `POST /v1/accounts {ticket, box_pub, bundle, name}`,
+   signed by the new signing key. Only a ticket whose sign-in passed the
+   invite check can make an account.
 4. Existing account: the app opens the bundle with the passphrase and checks
    the derived key ID equals `sign_pub`.
 5. Forgot passphrase: the recovery phrase gives the same entropy; the app

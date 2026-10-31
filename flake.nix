@@ -114,7 +114,7 @@
             echo "  run-superpages    # foreground: the server with hot reload (air) on ${listenAddr}"
             echo "  dev-up / dev-down # start/stop the server headless (logs in .data/logs)"
             echo "  db-reset          # delete the local database and blobs"
-            echo "  superpages-admin  # stats | codes create|list|revoke"
+            echo "  superpages-admin  # stats"
             echo "  run-app-web       # the app's web target via Vite on :5173"
             echo "  run-app-web-build # builds app/dist, what services.superpages.web serves (and the dev server)"
             echo "  run-app-android   # the app on a connected device/emulator (needs the system Android SDK)"

@@ -17,7 +17,6 @@ import (
 	"main/config"
 	"main/database"
 	"main/proto"
-	"main/regcode"
 )
 
 // fakeMail records what would have been emailed.
@@ -34,7 +33,7 @@ func (f *fakeMail) SendCode(to, code string) error {
 	f.codes[to] = code
 	return nil
 }
-func (f *fakeMail) SendShareNotice(to, _, _ string) error {
+func (f *fakeMail) SendShareNotice(to, _, _ string, _ bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.notices = append(f.notices, to)
@@ -76,7 +75,6 @@ func newEnv(t *testing.T, mod ...func(*config.Config)) *env {
 	dir := t.TempDir()
 	cfg := config.Config{
 		DataDir: dir, DBPath: filepath.Join(dir, "test.db"), BlobDir: dir, MaxBlobBytes: 1 << 20,
-		RequireRegCode: true, ShareInvitesBypassCode: true,
 	}
 	for _, m := range mod {
 		m(&cfg)
@@ -137,19 +135,16 @@ func (e *env) do(method, path string, body any, signer ed25519.PrivateKey, raw [
 	return w.Code, out, w.Header()
 }
 
-func (e *env) code(label string, uses int64) string {
-	code, _, err := regcode.Create(e.api.db, label, uses, 0, time.Now())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	return code
-}
-
-// verify runs the email-code steps and returns the verify response.
-func (e *env) verify(email string) map[string]any {
+// verify runs the email-code steps and returns the verify response. invite
+// is the pre-release code, if the server wants one.
+func (e *env) verify(email string, invite ...string) map[string]any {
 	e.t.Helper()
-	if st, _, _ := e.do("POST", "/v1/auth/email/start", map[string]string{"email": email}, nil, nil); st != 200 {
-		e.t.Fatalf("start: %d", st)
+	body := map[string]string{"email": email}
+	if len(invite) > 0 {
+		body["invite_code"] = invite[0]
+	}
+	if st, out, _ := e.do("POST", "/v1/auth/email/start", body, nil, nil); st != 200 {
+		e.t.Fatalf("start: %d %v", st, out)
 	}
 	st, out, _ := e.do("POST", "/v1/auth/email/verify", map[string]string{"email": email, "code": e.mail.code(e.t, email)}, nil, nil)
 	if st != 200 {
@@ -158,13 +153,14 @@ func (e *env) verify(email string) map[string]any {
 	return out
 }
 
-func (e *env) signup(email, name, code string) *user {
+// signup makes an account; invite is the pre-release code ("" if none).
+func (e *env) signup(email, name, invite string) *user {
 	e.t.Helper()
-	v := e.verify(email)
+	v := e.verify(email, invite)
 	priv, key := genKeys()
 	box := proto.B64.EncodeToString(make([]byte, 32))
 	st, out, _ := e.do("POST", "/v1/accounts", map[string]string{
-		"ticket": v["ticket"].(string), "reg_code": code, "box_pub": box, "bundle": "locked", "name": name,
+		"ticket": v["ticket"].(string), "box_pub": box, "bundle": "locked", "name": name,
 	}, priv, nil)
 	if st != 201 {
 		e.t.Fatalf("signup %s: %d %v", email, st, out)
@@ -206,7 +202,7 @@ func (e *env) share(owner *user, doc string, who *user, role string) {
 
 func TestSignatureAndReplay(t *testing.T) {
 	e := newEnv(t)
-	u := e.signup("a@example.com", "A", e.code("t", 1))
+	u := e.signup("a@example.com", "A", "")
 	if st, _, _ := e.do("GET", "/v1/me", nil, nil, nil); st != 401 {
 		t.Fatalf("unsigned: %d", st)
 	}
@@ -232,49 +228,93 @@ func TestSignatureAndReplay(t *testing.T) {
 	}
 }
 
-func TestRegistrationCodes(t *testing.T) {
-	e := newEnv(t)
-	try := func(email, code string) int {
-		v := e.verify(email)
-		if v["needs_code"] != true {
-			t.Fatalf("expected needs_code for %s", email)
-		}
-		priv, _ := genKeys()
-		st, _, _ := e.do("POST", "/v1/accounts", map[string]string{
-			"ticket": v["ticket"].(string), "reg_code": code, "box_pub": proto.B64.EncodeToString(make([]byte, 32)), "bundle": "x",
-		}, priv, nil)
-		return st
-	}
-	if st := try("nocode@example.com", ""); st != 403 {
-		t.Fatalf("no code: %d", st)
-	}
-	if st := try("wrong@example.com", "AAAA-BBBB-CCCC"); st != 403 {
-		t.Fatalf("wrong code: %d", st)
-	}
-	one := e.code("one", 1)
-	if st := try("first@example.com", strings.ToLower(one)); st != 201 {
-		t.Fatalf("good code (any case): %d", st)
-	}
-	if st := try("second@example.com", one); st != 403 {
-		t.Fatalf("used-up code: %d", st)
-	}
-	revoked := e.code("r", 5)
-	e.api.db.Model(&database.RegistrationCode{}).Where("code_hash = ?", regcode.Hash(revoked)).Update("revoked", true)
-	if st := try("third@example.com", revoked); st != 403 {
-		t.Fatalf("revoked code: %d", st)
-	}
-	expired, _, _ := regcode.Create(e.api.db, "e", 5, time.Hour, time.Now().Add(-2*time.Hour))
-	if st := try("fourth@example.com", expired); st != 403 {
-		t.Fatalf("expired code: %d", st)
-	}
+const testInvite = "Scroll Badger"
 
-	off := newEnv(t, func(c *config.Config) { c.RequireRegCode = false })
-	off.signup("free@example.com", "F", "")
+func TestPrereleaseCode(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.PrereleaseCode = testInvite })
+	start := func(email, invite string) (int, map[string]any) {
+		st, out, _ := e.do("POST", "/v1/auth/email/start", map[string]string{"email": email, "invite_code": invite}, nil, nil)
+		return st, out
+	}
+	if _, out, _ := e.do("GET", "/v1/config", nil, nil, nil); out["prerelease"] != true {
+		t.Fatalf("config doesn't say pre-release: %v", out)
+	}
+	// A new address with no code or a wrong one: nothing is emailed.
+	for _, code := range []string{"", "nope"} {
+		if st, out := start("new@example.com", code); st != 403 || out["code"] != "prerelease" {
+			t.Fatalf("code %q: %d %v", code, st, out)
+		}
+	}
+	if e.mail.codes["new@example.com"] != "" {
+		t.Fatal("a code was emailed without the invite code")
+	}
+	// The right code, ignoring case, spaces and dashes.
+	owner := e.signup("owner@example.com", "O", "scroll-BADGER")
+	// An existing account signs in without it, and any code it sends is ignored.
+	if st, out := start("owner@example.com", ""); st != 200 {
+		t.Fatalf("existing account without code: %d %v", st, out)
+	}
+	e.mail.code(t, "owner@example.com")
+	if st, _ := start("owner@example.com", "wrong"); st != 200 {
+		t.Fatalf("existing account with a stray code: %d", st)
+	}
+	// A ticket from signing in as an existing account can't make a new one
+	// (if that account is deleted in between).
+	_, v, _ := e.do("POST", "/v1/auth/email/verify", map[string]string{"email": "owner@example.com", "code": e.mail.code(t, "owner@example.com")}, nil, nil)
+	e.do("DELETE", "/v1/me", nil, owner.priv, nil)
+	priv, _ := genKeys()
+	if st, _, _ := e.do("POST", "/v1/accounts", map[string]string{
+		"ticket": v["ticket"].(string), "box_pub": proto.B64.EncodeToString(make([]byte, 32)), "bundle": "x",
+	}, priv, nil); st != 403 {
+		t.Fatalf("existing-account ticket made an account: %d", st)
+	}
+	// Someone a page was shared with needs the code too.
+	sharer := e.signup("sharer@example.com", "S", testInvite)
+	doc := e.createDoc(sharer)
+	e.do("POST", "/v1/docs/"+doc+"/share", map[string]string{"email": "guest@example.com", "role": "view"}, sharer.priv, nil)
+	if st, _ := start("guest@example.com", ""); st != 403 {
+		t.Fatalf("invited address without code: %d", st)
+	}
+	// With no code set, anyone can sign up.
+	newEnv(t).signup("free@example.com", "F", "")
 }
 
-func TestShareInviteSkipsCode(t *testing.T) {
+func TestInviteCodeGuessing(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.PrereleaseCode = testInvite })
+	e.ip = 7
+	try := func(i int, code string) int {
+		st, _, _ := e.do("POST", "/v1/auth/email/start", map[string]string{"email": "g" + strconv.Itoa(i) + "@example.com", "invite_code": code}, nil, nil)
+		return st
+	}
+	// 5 wrong codes an hour per address; then even the right one waits.
+	for i := 0; i < 5; i++ {
+		if st := try(i, "guess"+strconv.Itoa(i)); st != 403 {
+			t.Fatalf("wrong code %d: %d", i, st)
+		}
+	}
+	if st := try(5, testInvite); st != 429 {
+		t.Fatalf("after 5 wrong codes: %d", st)
+	}
+	// Another address isn't held up by that one's guesses.
+	e.ip = 8
+	if st := try(6, testInvite); st != 200 {
+		t.Fatalf("other address: %d", st)
+	}
+	// Asking for codes is capped per address per day, account or not.
+	e.ip = 9
+	last := 0
+	for i := 0; i < 31; i++ {
+		e.api.SetClock(func() time.Time { return time.Now().Add(time.Duration(i) * 11 * time.Minute) })
+		last = try(100+i, testInvite)
+	}
+	if last != 429 {
+		t.Fatalf("daily start limit: %d", last)
+	}
+}
+
+func TestPendingShare(t *testing.T) {
 	e := newEnv(t)
-	owner := e.signup("owner@example.com", "Owner", e.code("o", 1))
+	owner := e.signup("owner@example.com", "Owner", "")
 	doc := e.createDoc(owner)
 	st, out, _ := e.do("POST", "/v1/docs/"+doc+"/share", map[string]string{"email": "Friend@Example.com", "role": "edit"}, owner.priv, nil)
 	if st != 200 || out["pending"] == nil {
@@ -286,9 +326,6 @@ func TestShareInviteSkipsCode(t *testing.T) {
 	if len(e.mail.notices) != 1 {
 		// sent in a goroutine
 		time.Sleep(50 * time.Millisecond)
-	}
-	if v := e.verify("friend@example.com"); v["needs_code"] != false {
-		t.Fatalf("invited email asked for a code: %v", v)
 	}
 	friend := e.signup("friend@example.com", "Friend", "")
 
@@ -315,14 +352,6 @@ func TestShareInviteSkipsCode(t *testing.T) {
 			t.Fatalf("member fields missing: %v", mv)
 		}
 	}
-
-	strict := newEnv(t, func(c *config.Config) { c.ShareInvitesBypassCode = false })
-	o2 := strict.signup("o@example.com", "O", strict.code("o", 1))
-	d2 := strict.createDoc(o2)
-	strict.do("POST", "/v1/docs/"+d2+"/share", map[string]string{"email": "x@example.com", "role": "view"}, o2.priv, nil)
-	if v := strict.verify("x@example.com"); v["needs_code"] != true {
-		t.Fatalf("bypass off but no code needed")
-	}
 }
 
 func TestEmailRateLimits(t *testing.T) {
@@ -343,7 +372,7 @@ func TestEmailRateLimits(t *testing.T) {
 		t.Fatalf("verify limit: %d", last)
 	}
 
-	e = newEnv(t, func(c *config.Config) { c.RequireRegCode = false })
+	e = newEnv(t)
 	owner := e.signup("owner@example.com", "O", "")
 	doc := e.createDoc(owner)
 	for i := 0; i < 31; i++ {
@@ -367,7 +396,7 @@ func TestWrongCodeAttempts(t *testing.T) {
 }
 
 func TestRoles(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.RequireRegCode = false })
+	e := newEnv(t)
 	owner := e.signup("owner@example.com", "Owner", "")
 	editor := e.signup("editor@example.com", "Editor", "")
 	viewer := e.signup("viewer@example.com", "Viewer", "")
@@ -426,7 +455,7 @@ func TestRoles(t *testing.T) {
 }
 
 func TestRekeyRemovesMember(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.RequireRegCode = false })
+	e := newEnv(t)
 	owner := e.signup("owner@example.com", "Owner", "")
 	gone := e.signup("gone@example.com", "Gone", "")
 	stays := e.signup("stays@example.com", "Stays", "")
@@ -464,7 +493,7 @@ func TestRekeyRemovesMember(t *testing.T) {
 }
 
 func TestShareLink(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.RequireRegCode = false })
+	e := newEnv(t)
 	owner := e.signup("owner@example.com", "Owner", "")
 	joiner := e.signup("joiner@example.com", "Joiner", "")
 	doc := e.createDoc(owner)
@@ -499,7 +528,7 @@ func TestShareLink(t *testing.T) {
 }
 
 func TestResetAccount(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.RequireRegCode = false })
+	e := newEnv(t)
 	owner := e.signup("owner@example.com", "Owner", "")
 	friend := e.signup("friend@example.com", "Friend", "")
 	shared := e.createDoc(owner)
@@ -539,7 +568,7 @@ func TestResetAccount(t *testing.T) {
 }
 
 func TestBlobsAndAvatar(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.RequireRegCode = false })
+	e := newEnv(t)
 	owner := e.signup("owner@example.com", "Owner", "")
 	viewer := e.signup("viewer@example.com", "Viewer", "")
 	doc := e.createDoc(owner)
@@ -570,7 +599,7 @@ func TestBlobsAndAvatar(t *testing.T) {
 // TestNoEmailLeaks runs the whole flow and checks that no response but the
 // caller's own /me carries another user's address.
 func TestNoEmailLeaks(t *testing.T) {
-	e := newEnv(t, func(c *config.Config) { c.RequireRegCode = false })
+	e := newEnv(t)
 	owner := e.signup("owner-secret@example.com", "Owner", "")
 	other := e.signup("other-secret@example.com", "Other", "")
 	doc := e.createDoc(owner)

@@ -34,6 +34,9 @@ type API struct {
 	codeSendPerIP    *limiter
 	codeSendPerEmail *limiter
 	codeSendAll      *limiter
+	codeSendPerIPDay *limiter
+	inviteFailPerIP  *limiter
+	inviteFailAll    *limiter
 	codeVerifyPerIP  *limiter
 	accountPerIP     *limiter
 	resolvePerHour   *limiter
@@ -55,13 +58,20 @@ func New(db *gorm.DB, cfg config.Config, m mail.Mailer) *API {
 		codeSendPerIP:    newLimiter(5, 10*time.Minute),
 		codeSendPerEmail: newLimiter(3, 10*time.Minute),
 		codeSendAll:      newLimiter(200, time.Minute),
-		codeVerifyPerIP:  newLimiter(20, 10*time.Minute),
-		accountPerIP:     newLimiter(10, time.Hour),
-		resolvePerHour:   newLimiter(30, time.Hour),
-		resolvePerDay:    newLimiter(200, 24*time.Hour),
-		resolvePerDoc:    newLimiter(50, 24*time.Hour),
-		noticePerSender:  newLimiter(20, 24*time.Hour),
-		noticePerEmail:   newLimiter(5, 24*time.Hour),
+		// Asking for a code says whether an address has an account (a new
+		// one needs the pre-release code), so cap that per day too.
+		codeSendPerIPDay: newLimiter(30, 24*time.Hour),
+		// Wrong pre-release codes. The code is memorable text, so guessing
+		// is capped per address and across everyone.
+		inviteFailPerIP: newLimiter(5, time.Hour),
+		inviteFailAll:   newLimiter(100, time.Hour),
+		codeVerifyPerIP: newLimiter(20, 10*time.Minute),
+		accountPerIP:    newLimiter(10, time.Hour),
+		resolvePerHour:  newLimiter(30, time.Hour),
+		resolvePerDay:   newLimiter(200, 24*time.Hour),
+		resolvePerDoc:   newLimiter(50, 24*time.Hour),
+		noticePerSender: newLimiter(20, 24*time.Hour),
+		noticePerEmail:  newLimiter(5, 24*time.Hour),
 
 		writesPerUser: newLimiter(600, time.Hour),
 		readsPerUser:  newLimiter(1200, time.Minute),
@@ -160,11 +170,11 @@ func (a *API) Router() *gin.Engine {
 // serverConfig tells the app what this server asks of new accounts.
 func (a *API) serverConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"app":              "superpages",
-		"require_reg_code": a.cfg.RequireRegCode,
-		"email_ready":      a.mail.Ready(),
-		"max_blob_bytes":   a.cfg.MaxBlobBytes,
-		"public_origin":    a.cfg.PublicOrigin,
+		"app":            "superpages",
+		"prerelease":     a.cfg.PrereleaseCode != "",
+		"email_ready":    a.mail.Ready(),
+		"max_blob_bytes": a.cfg.MaxBlobBytes,
+		"public_origin":  a.cfg.PublicOrigin,
 	})
 }
 

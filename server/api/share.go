@@ -78,9 +78,9 @@ func (a *API) shareByEmail(c *gin.Context) {
 	// sender and per address so this can't be used to spam anyone.
 	now := a.now()
 	if a.noticePerSender.allow(u.ID, now) && a.noticePerEmail.allow(email, now) {
-		name, origin := u.Name, a.cfg.PublicOrigin
+		name, origin, invite := u.Name, a.cfg.PublicOrigin, a.cfg.PrereleaseCode != ""
 		go func() {
-			if err := a.mail.SendShareNotice(email, name, origin); err != nil {
+			if err := a.mail.SendShareNotice(email, name, origin, invite); err != nil {
 				log.Printf("share notice for %s: %v", otp.Mask(email), err)
 			}
 		}()

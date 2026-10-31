@@ -165,6 +165,15 @@ func (l *limiter) allow(key string, now time.Time) bool {
 	return w.n <= l.limit
 }
 
+// full reports whether key has used up its window, without counting a hit:
+// for limits on failures, which are only counted once they happen.
+func (l *limiter) full(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	w, ok := l.hits[key]
+	return ok && now.Sub(w.start) <= l.window && w.n >= l.limit
+}
+
 // retryAfter is how long until key's window resets, in whole seconds.
 func (l *limiter) retryAfter(key string, now time.Time) int {
 	l.mu.Lock()

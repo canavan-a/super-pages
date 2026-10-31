@@ -18,13 +18,20 @@ let
   npmCache = "/var/cache/superpages-npm";
   webDir = "${stateDir}/web";
 
-  # `superpages-admin codes create` etc. against the running service's database.
+  # `superpages-admin stats` against the running service's database.
   adminWrapper = pkgs.writeShellScriptBin "superpages-admin" ''
     export SUPERPAGES_DATA_DIR="${cfg.dataDir}"
     exec ${pkgs.sudo}/bin/sudo -u superpages -E ${adminBin} "$@"
   '';
 in
 {
+  imports = [
+    (lib.mkRemovedOptionModule [ "services" "superpages" "requireRegistrationCode" ]
+      "New accounts now give the pre-release invite code, SUPERPAGES_PRERELEASE_CODE in environmentFile.")
+    (lib.mkRemovedOptionModule [ "services" "superpages" "shareInvitesBypassCode" ]
+      "People invited by email need SUPERPAGES_PRERELEASE_CODE like anyone else.")
+  ];
+
   options.services.superpages = {
     enable = lib.mkEnableOption "the Super Pages end-to-end encrypted documents server";
 
@@ -72,28 +79,10 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Rate-limit by the client address a local tunnel (Pangolin/newt,
-        cloudflared) reports: the rightmost X-Forwarded-For entry, believed
+        Rate-limit by the client address a local tunnel (the Super Matrix
+        relay, cloudflared) reports: the rightmost X-Forwarded-For entry, believed
         only on loopback connections, so clients can't forge it. Turn off if
         clients connect to the server directly.
-      '';
-    };
-
-    requireRegistrationCode = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        New accounts need a registration code (`superpages-admin codes
-        create`). Turn off to let anyone with an email address sign up.
-      '';
-    };
-
-    shareInvitesBypassCode = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Someone a page was shared with by email can sign up without a
-        registration code: the share is their invitation.
       '';
     };
 
@@ -104,9 +93,11 @@ in
       description = ''
         Environment file with the SMTP settings for sign-in codes:
         SUPERPAGES_SMTP_EMAIL and SUPERPAGES_SMTP_APP_PASSWORD (and, if not
-        Gmail, SUPERPAGES_SMTP_HOST / SUPERPAGES_SMTP_PORT). Give a runtime
-        path as a string, not a Nix path literal, which would copy the secret
-        into the store.
+        Gmail, SUPERPAGES_SMTP_HOST / SUPERPAGES_SMTP_PORT). Also the place
+        for SUPERPAGES_PRERELEASE_CODE: while it's set, an address without an
+        account must give that code before a sign-in code is emailed to it;
+        unset, anyone can sign up. Give a runtime path as a string, not a Nix
+        path literal, which would copy the secret into the store.
       '';
     };
 
@@ -180,8 +171,6 @@ in
         SUPERPAGES_ANDROID_CERT_SHA256 = lib.concatStringsSep "," cfg.androidCertSha256;
         SUPERPAGES_MAX_BLOB_MB = toString cfg.maxBlobMB;
         SUPERPAGES_TRUST_PROXY = if cfg.trustProxy then "1" else "0";
-        SUPERPAGES_REQUIRE_REG_CODE = if cfg.requireRegistrationCode then "1" else "0";
-        SUPERPAGES_SHARE_INVITES_BYPASS_CODE = if cfg.shareInvitesBypassCode then "1" else "0";
       } // lib.optionalAttrs cfg.web.enable {
         SUPERPAGES_STATIC_DIR = webDir;
       };

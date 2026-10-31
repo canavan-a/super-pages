@@ -22,14 +22,14 @@ same themes, boot screen (a scroll that unrolls) and release flow.
 - **Sharing.** Each page can be shared by email or by link, as owner (full
   control), edit (edit only) or view. Removing someone gives the page a new
   key. Nobody can look up anyone's email address.
-- **Invite-only for now.** New accounts need a registration code.
+- **Invite-only for now.** A new account needs the pre-release invite code
+  (one shared code, set on the server) before a sign-in code is emailed.
 
 ## Running it
 
 ```sh
 nix develop
 dev-up                 # server on 127.0.0.1:8080 (codes go to .data/logs/superpages.log)
-superpages-admin codes create --uses 5 --label "me"
 run-app-web            # web app on :5173, talking to the dev server
 run-tests              # server tests, app tests, then end to end
 ```
@@ -45,7 +45,8 @@ services.superpages = {
   enable = true;
   publicOrigin = "https://pages.superbadger.io";
   web.enable = true;
-  environmentFile = "/run/secrets/superpages.env"; # SUPERPAGES_SMTP_EMAIL / _APP_PASSWORD
+  # SUPERPAGES_SMTP_EMAIL / _APP_PASSWORD, and SUPERPAGES_PRERELEASE_CODE
+  environmentFile = "/run/secrets/superpages.env";
 };
 ```
 

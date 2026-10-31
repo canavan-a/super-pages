@@ -228,12 +228,12 @@ export interface Todo {
 export interface VerifyResult {
   ticket: string;
   account: {bundle: string; sign_pub: string; key_gen: number} | null;
-  needs_code?: boolean;
 }
 
 export interface ServerConfig {
   app: string;
-  require_reg_code: boolean;
+  // New accounts need the pre-release invite code to get a sign-in code.
+  prerelease: boolean;
   email_ready: boolean;
   max_blob_bytes: number;
   public_origin: string;
@@ -244,8 +244,11 @@ export interface ServerConfig {
 export const api = {
   config: (server: string) =>
     request<ServerConfig>(server, 'GET', '/v1/config', null),
-  emailStart: (server: string, email: string) =>
-    request<{ok: true}>(server, 'POST', '/v1/auth/email/start', null, {email}),
+  emailStart: (server: string, email: string, inviteCode: string) =>
+    request<{ok: true}>(server, 'POST', '/v1/auth/email/start', null, {
+      email,
+      invite_code: inviteCode,
+    }),
   emailVerify: (server: string, email: string, code: string) =>
     request<VerifyResult>(server, 'POST', '/v1/auth/email/verify', null, {
       email,
@@ -256,7 +259,6 @@ export const api = {
     by: Signer,
     b: {
       ticket: string;
-      reg_code: string;
       box_pub: string;
       bundle: string;
       name: string;

@@ -12,23 +12,6 @@ type User struct {
 	CreatedAt  int64 `gorm:"autoCreateTime:false"`
 }
 
-type RegistrationCode struct {
-	ID        string `gorm:"primaryKey"`
-	CodeHash  string
-	Label     string
-	MaxUses   int64
-	Uses      int64
-	ExpiresAt *int64
-	Revoked   bool
-	CreatedAt int64 `gorm:"autoCreateTime:false"`
-}
-
-type CodeRedemption struct {
-	CodeID string `gorm:"primaryKey"`
-	UserID string `gorm:"primaryKey"`
-	At     int64
-}
-
 type Document struct {
 	ID         string `gorm:"primaryKey"`
 	CreatedBy  string

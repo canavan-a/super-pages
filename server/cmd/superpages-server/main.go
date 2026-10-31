@@ -35,8 +35,10 @@ func main() {
 	if cfg.LogCodes {
 		log.Printf("warning: SUPERPAGES_LOG_CODES is on: sign-in codes are written to this log (dev only)")
 	}
-	if !cfg.RequireRegCode {
-		log.Printf("registration codes are off: anyone with an email address can sign up")
+	if cfg.PrereleaseCode == "" {
+		log.Printf("SUPERPAGES_PRERELEASE_CODE isn't set: anyone with an email address can sign up")
+	} else {
+		log.Printf("pre-release: new accounts need the invite code (SUPERPAGES_PRERELEASE_CODE)")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
