@@ -121,23 +121,26 @@ run('end to end', () => {
     const alice = await signUp('alice@example.com', 'Alice', 'scroll-badger');
     const carol = await signUp('carol@example.com', 'Carol');
 
-    // Alice writes a page.
+    // Alice writes a page. It starts untitled; the title is kept apart from the text.
     as(alice);
     const id = await store.createDoc('');
     let opened = await store.openDoc(id);
+    expect(opened.title).toBe('');
     const secret = 'The launch code is 0000. Nobody may know.';
     let version = await store.saveDoc(
       id,
       opened.doc.version,
       opened.doc.epoch,
       opened.key,
-      `# Plans\n\n${secret}\n`,
+      `${secret}\n`,
+      'Plans',
     );
     await store.refreshDocs();
     expect(store.getState().docs[0].head).toEqual({
       title: 'Plans',
       snippet: secret,
     });
+    expect((await store.openDoc(id)).title).toBe('Plans');
 
     // Shares it with Bob, who has no account yet: a pending share.
     const r = await store.shareByEmail(id, 'bob@example.com', 'edit');
@@ -165,7 +168,8 @@ run('end to end', () => {
       opened.doc.version,
       opened.doc.epoch,
       opened.key,
-      `# Plans\n\n${secret}\n\nBob was here.\n`,
+      `${secret}\n\nBob was here.\n`,
+      opened.title,
     );
     // Editors can't share.
     await expect(
@@ -190,6 +194,7 @@ run('end to end', () => {
         opened.doc.epoch,
         opened.key,
         'vandalised',
+        opened.title,
       ),
     ).rejects.toMatchObject({
       status: 403,

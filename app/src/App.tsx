@@ -12,6 +12,8 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
+  TextStyle,
   View,
 } from 'react-native';
 import {
@@ -60,6 +62,8 @@ const TITLES: Record<Route['name'], string> = {
 // the one top bar.
 export interface HeaderInfo {
   title: string;
+  /** Makes the title an input (shown as "Untitled" while empty); called as it's typed. */
+  onRename?: (title: string) => void;
   subtitle?: string;
   /** Who the page is shared with, drawn as a cluster beside the actions. */
   members?: Member[];
@@ -296,6 +300,13 @@ function AppInner({
         <View style={styles.headerTextArea}>
           {route.name === 'home' ? (
             <LogoLine height={22} />
+          ) : showDocHeader && headerInfo!.onRename ? (
+            <TitleInput
+              value={headerInfo!.title}
+              onChange={headerInfo!.onRename}
+              style={styles.headerTitle}
+              placeholderColor={theme.textMuted}
+            />
           ) : (
             <Text style={styles.headerTitle} numberOfLines={1}>
               {showDocHeader && headerInfo!.title
@@ -390,6 +401,57 @@ function AppInner({
 const styles = StyleSheet.create({
   fill: {flex: 1, alignItems: 'center', justifyContent: 'center'},
   fillBox: {flex: 1},
+});
+
+/**
+ * The page title in the top bar, edited in place. It keeps what's typed
+ * itself, so the round trip through the screen's header never moves the
+ * cursor, and only takes the value from outside while it isn't focused.
+ */
+function TitleInput({
+  value,
+  onChange,
+  style,
+  placeholderColor,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  style: TextStyle;
+  placeholderColor: string;
+}): React.JSX.Element {
+  const [text, setText] = useState(value);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setText(value);
+  }, [value]);
+  return (
+    <TextInput
+      value={text}
+      onChangeText={t => {
+        setText(t);
+        onChange(t);
+      }}
+      onFocus={() => (focused.current = true)}
+      onBlur={() => (focused.current = false)}
+      placeholder="Untitled"
+      placeholderTextColor={placeholderColor}
+      accessibilityLabel="Page title"
+      maxLength={120}
+      returnKeyType="done"
+      blurOnSubmit
+      style={[style, styles2.titleInput]}
+    />
+  );
+}
+
+const styles2 = StyleSheet.create({
+  titleInput: {
+    padding: 0,
+    margin: 0,
+    borderWidth: 0,
+    minWidth: 0,
+    outlineWidth: 0,
+  },
 });
 
 function makeStyles(theme: Theme) {

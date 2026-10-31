@@ -17,7 +17,7 @@ import {
   b64,
   DocHead,
   formatShareLink,
-  headFromMarkdown,
+  makeHead,
   imageUrl,
   joinProof,
   linkKeys,
@@ -151,6 +151,8 @@ export interface OpenDoc {
   doc: DocFull;
   key: Uint8Array;
   markdown: string;
+  /** The page's title, kept apart from its text ('' until someone names it). */
+  title: string;
   /** False if the last save's signature didn't check out against its writer's key. */
   verified: boolean;
 }
@@ -169,6 +171,7 @@ export async function openDoc(id: string): Promise<OpenDoc> {
   const key = docKey(s, doc);
   if (!key) throw new LockedError();
   const markdown = openBody(key, doc.id, doc.epoch, doc.body_ct);
+  const {title} = openHead(key, doc.id, doc.epoch, doc.head_ct);
   const writer = doc.members.find(m => m.id === doc.updated_by);
   const verified =
     !!writer &&
@@ -181,7 +184,7 @@ export async function openDoc(id: string): Promise<OpenDoc> {
       doc.body_ct,
       doc.sig,
     );
-  return {doc, key, markdown, verified};
+  return {doc, key, markdown, title, verified};
 }
 
 function sealed(
@@ -191,8 +194,9 @@ function sealed(
   epoch: number,
   key: Uint8Array,
   markdown: string,
+  title: string,
 ) {
-  const head = headFromMarkdown(markdown);
+  const head = makeHead(title, markdown);
   const head_ct = sealHead(key, id, epoch, head);
   const body_ct = sealBody(key, id, epoch, markdown);
   return {
@@ -203,11 +207,19 @@ function sealed(
   };
 }
 
-export async function createDoc(markdown = ''): Promise<string> {
+export async function createDoc(markdown = '', title = ''): Promise<string> {
   const s = session.require();
   const id = newId();
   const key = newDocKey();
-  const {head, head_ct, body_ct, sig} = sealed(s, id, 1, 1, key, markdown);
+  const {head, head_ct, body_ct, sig} = sealed(
+    s,
+    id,
+    1,
+    1,
+    key,
+    markdown,
+    title,
+  );
   const res = await api.createDoc(s.server, s.account, {
     id,
     base_version: 0,
@@ -254,13 +266,14 @@ export class ConflictError extends Error {
   }
 }
 
-/** Saves markdown as the version after base. Throws ConflictError if someone else saved first. */
+/** Saves the title and markdown as the version after base. Throws ConflictError if someone else saved first. */
 export async function saveDoc(
   id: string,
   base: number,
   epoch: number,
   key: Uint8Array,
   markdown: string,
+  title: string,
 ): Promise<number> {
   const s = session.require();
   const {head, head_ct, body_ct, sig} = sealed(
@@ -270,6 +283,7 @@ export async function saveDoc(
     epoch,
     key,
     markdown,
+    title,
   );
   try {
     const res = await api.saveDoc(s.server, s.account, id, {
@@ -364,7 +378,7 @@ export async function cancelPending(
  */
 export async function rekey(id: string, remove: string[] = []): Promise<void> {
   const s = session.require();
-  const {doc, markdown} = await openDoc(id);
+  const {doc, markdown, title} = await openDoc(id);
   const epoch = doc.epoch + 1;
   const key = newDocKey();
   const stay = doc.members.filter((m: Member) => !remove.includes(m.id));
@@ -375,6 +389,7 @@ export async function rekey(id: string, remove: string[] = []): Promise<void> {
     epoch,
     key,
     markdown,
+    title,
   );
   const wrapped: Record<string, string> = {};
   for (const m of stay) wrapped[m.id] = wrapDocKey(key, m.box_pub, id);

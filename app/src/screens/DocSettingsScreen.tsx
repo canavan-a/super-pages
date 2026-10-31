@@ -32,7 +32,6 @@ import {platformConfirm} from '../platformConfirm';
 import type {Route} from '../routes';
 import {session} from '../session';
 import {Theme, useTheme} from '../theme';
-import {headFromMarkdown} from '../crypto';
 
 const EXPIRY = [
   {hours: 24, label: '1 day'},
@@ -76,7 +75,7 @@ export function DocSettingsScreen({
     try {
       const o = await openDoc(id);
       setDoc(o.doc);
-      setTitle(headFromMarkdown(o.markdown).title);
+      setTitle(o.title);
       if (o.doc.role === 'owner') setLinks(await listLinks(id));
     } catch (e) {
       setError((e as Error).message);

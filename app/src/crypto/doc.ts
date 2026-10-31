@@ -1,6 +1,6 @@
 // Document encryption (docs/protocol.md, "Documents"). Every document has a
 // random 32-byte key per epoch, sealed to each member's X25519 key. Its head
-// ({title, snippet}, for the grid) and body (markdown) are sealed under it,
+// ({title, snippet}, for the grid and the top bar) and body (markdown) are sealed under it,
 // bound to the document and epoch. Images are sealed under their own keys,
 // which live inside the body, so they're only as readable as the body.
 import {sha256} from '@noble/hashes/sha256';
@@ -149,15 +149,16 @@ export function plainText(md: string): string {
     .trim();
 }
 
-/** The title (first non-empty line) and the snippet (what follows) the grid shows. */
-export function headFromMarkdown(md: string): DocHead {
-  const lines = md
+/** The head: the page's own title (set apart from its text) and a snippet of the text for the grid. */
+export function makeHead(title: string, md: string): DocHead {
+  const snippet = md
     .split('\n')
     .map(plainText)
-    .filter(l => l.length > 0);
-  const title = (lines[0] ?? '').slice(0, 120);
-  const snippet = lines.slice(1).join(' ').replace(/\s+/g, ' ').slice(0, 280);
-  return {title, snippet};
+    .filter(l => l.length > 0)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .slice(0, 280);
+  return {title: title.trim().slice(0, 120), snippet};
 }
 
 // ---- images ----

@@ -8,6 +8,7 @@ import Image from '@tiptap/extension-image';
 import {TaskItem, TaskList} from '@tiptap/extension-list';
 import {Placeholder} from '@tiptap/extensions';
 import {Markdown} from '@tiptap/markdown';
+import {Selection} from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 
 export interface EditorColors {
@@ -94,7 +95,7 @@ type Btn = {
 const BUTTONS: (Btn | '|')[] = [
   {
     label: 'H1',
-    title: 'Title',
+    title: 'Big heading',
     run: e => e.chain().focus().toggleHeading({level: 1}).run(),
     active: e => e.isActive('heading', {level: 1}),
   },
@@ -232,14 +233,11 @@ export function mountEditor(o: EditorOptions): EditorHandle {
   root.appendChild(scroll);
   o.el.appendChild(root);
 
-  const empty = o.markdown.trim() === '';
   const editor = new Editor({
     element: host,
     editable: !o.readOnly,
-    content: empty
-      ? {type: 'doc', content: [{type: 'heading', attrs: {level: 1}}]}
-      : o.markdown,
-    contentType: empty ? 'json' : 'markdown',
+    content: o.markdown,
+    contentType: 'markdown',
     extensions: [
       StarterKit.configure({link: {openOnClick: false, autolink: true}}),
       Markdown,
@@ -247,10 +245,7 @@ export function mountEditor(o: EditorOptions): EditorHandle {
       TaskItem.configure({nested: true}),
       secureImage(o.resolveImage),
       Placeholder.configure({
-        placeholder: ({node, pos}) =>
-          pos === 0 && node.type.name === 'heading'
-            ? 'Title'
-            : 'Start writing…',
+        placeholder: 'Start writing…',
         showOnlyCurrent: true,
       }),
     ],
@@ -301,6 +296,14 @@ export function mountEditor(o: EditorOptions): EditorHandle {
   toolbar.appendChild(sep);
   add({label: '🖼', title: 'Insert image', run: () => o.onPickImage()});
 
+  // Not the focus command: on phones it focuses the page mid-command, which
+  // lets the browser's own selection change slip in first, and the command's
+  // transaction then no longer applies ("Applying a mismatched transaction").
+  const focusView = () =>
+    requestAnimationFrame(() => {
+      if (!editor.isDestroyed) editor.view.focus();
+    });
+
   const refresh = () => {
     for (const {el, b} of buttons)
       el.classList.toggle('on', !!b.active?.(editor));
@@ -318,15 +321,16 @@ export function mountEditor(o: EditorOptions): EditorHandle {
       style.textContent = BASE_CSS + css(colors);
     },
     insertImage(url, alt = '') {
-      editor
-        .chain()
-        .focus()
-        .setImage({src: url, alt})
-        .createParagraphNear()
-        .run();
+      editor.chain().setImage({src: url, alt}).createParagraphNear().run();
+      focusView();
     },
     getMarkdown: () => editor.getMarkdown(),
-    focus: () => editor.commands.focus(empty ? 'start' : 'end'),
+    focus: () => {
+      editor.view.dispatch(
+        editor.state.tr.setSelection(Selection.atEnd(editor.state.doc)),
+      );
+      focusView();
+    },
     destroy() {
       editor.destroy();
       o.el.innerHTML = '';

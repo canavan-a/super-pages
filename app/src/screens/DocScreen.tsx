@@ -10,7 +10,6 @@ import {
 
 import type {HeaderInfo} from '../App';
 import {Notice} from '../components/Notice';
-import {headFromMarkdown} from '../crypto';
 import {DocEditor} from '../editor/DocEditor';
 import type {DocEditorRef} from '../editor/types';
 import {pickImages} from '../files';
@@ -59,6 +58,10 @@ export function DocScreen({
   // What's on screen vs. what the server has.
   const latest = useRef<string>('');
   const saved = useRef<string>('');
+  // The title, kept apart from the text and edited in the top bar.
+  const [title, setTitle] = useState('');
+  const latestTitle = useRef('');
+  const savedTitle = useRef('');
   const base = useRef({version: 0, epoch: 0});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef<Promise<void> | null>(null);
@@ -68,6 +71,8 @@ export function DocScreen({
     try {
       const o = await openDoc(id);
       latest.current = saved.current = o.markdown;
+      latestTitle.current = savedTitle.current = o.title;
+      setTitle(o.title);
       base.current = {version: o.doc.version, epoch: o.doc.epoch};
       setOpened(o);
       setSaveState('saved');
@@ -91,8 +96,14 @@ export function DocScreen({
       timer.current = null;
     }
     if (inFlight.current) await inFlight.current;
-    if (!opened || latest.current === saved.current) return;
+    if (
+      !opened ||
+      (latest.current === saved.current &&
+        latestTitle.current === savedTitle.current)
+    )
+      return;
     const md = latest.current;
+    const t = latestTitle.current;
     setSaveState('saving');
     inFlight.current = (async () => {
       try {
@@ -102,11 +113,17 @@ export function DocScreen({
           base.current.epoch,
           opened.key,
           md,
+          t,
         );
         base.current.version = v;
         saved.current = md;
+        savedTitle.current = t;
         setSaveError(null);
-        setSaveState(latest.current === md ? 'saved' : 'dirty');
+        setSaveState(
+          latest.current === md && latestTitle.current === t
+            ? 'saved'
+            : 'dirty',
+        );
       } catch (e) {
         if (e instanceof ConflictError) {
           setSaveState('conflict');
@@ -120,17 +137,34 @@ export function DocScreen({
     inFlight.current = null;
   }, [id, opened]);
 
+  const changed = useCallback(() => {
+    if (
+      latest.current === saved.current &&
+      latestTitle.current === savedTitle.current
+    )
+      return;
+    setSaveState(s => (s === 'conflict' ? s : 'dirty'));
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      flush();
+    }, SAVE_DELAY_MS);
+  }, [flush]);
+
   const onChange = useCallback(
     (md: string) => {
       latest.current = md;
-      if (md === saved.current) return;
-      setSaveState(s => (s === 'conflict' ? s : 'dirty'));
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => {
-        flush();
-      }, SAVE_DELAY_MS);
+      changed();
     },
-    [flush],
+    [changed],
+  );
+
+  const onRename = useCallback(
+    (t: string) => {
+      latestTitle.current = t;
+      setTitle(t);
+      changed();
+    },
+    [changed],
   );
 
   // Save before leaving the page or the app.
@@ -151,7 +185,10 @@ export function DocScreen({
     )
       return;
     const warn = (e: BeforeUnloadEvent) => {
-      if (latest.current !== saved.current) {
+      if (
+        latest.current !== saved.current ||
+        latestTitle.current !== savedTitle.current
+      ) {
         flush();
         e.preventDefault();
       }
@@ -170,6 +207,7 @@ export function DocScreen({
       }
       base.current = {version: o.doc.version, epoch: o.doc.epoch};
       saved.current = o.markdown;
+      savedTitle.current = o.title;
       setSaveState('dirty');
       await flush();
     } catch (e) {
@@ -220,7 +258,8 @@ export function DocScreen({
       return;
     }
     onHeaderChange({
-      title: headFromMarkdown(latest.current).title || 'Untitled',
+      title: canWrite ? title : title || 'Untitled',
+      onRename: canWrite ? onRename : undefined,
       subtitle: status,
       members: opened.doc.members,
       actions: [
@@ -237,6 +276,8 @@ export function DocScreen({
     });
   }, [
     opened,
+    title,
+    onRename,
     status,
     canWrite,
     pickImage,

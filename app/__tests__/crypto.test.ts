@@ -9,7 +9,7 @@ import {
   bytesToHex,
   docSigningString,
   entropyFromPhrase,
-  headFromMarkdown,
+  makeHead,
   imageUrl,
   joinProof,
   linkKeys,
@@ -84,9 +84,11 @@ test('head and body are bound to their document and epoch', () => {
   const key = newDocKey();
   const md =
     '# Groceries\n\n- [ ] eggs\n- [x] **milk**\n\nRemember the ![photo](sp-img:AAAAAAAAAAAAAAAAAAAAAA#BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB) list';
-  const head = headFromMarkdown(md);
-  expect(head.title).toBe('Groceries');
-  expect(head.snippet).toBe('eggs milk Remember the list');
+  // The title is the page's own, not taken from its text.
+  const head = makeHead('  Shopping ', md);
+  expect(head.title).toBe('Shopping');
+  expect(head.snippet).toBe('Groceries eggs milk Remember the list');
+  expect(makeHead('', '').title).toBe('');
   const h = sealHead(key, doc, 3, head);
   const b = sealBody(key, doc, 3, md);
   expect(openHead(key, doc, 3, h)).toEqual(head);
