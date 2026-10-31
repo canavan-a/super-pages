@@ -1,0 +1,52 @@
+diff --git a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/KeychainModuleBuilder.java b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/KeychainModuleBuilder.java
+index b144915..0565db4 100644
+--- a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/KeychainModuleBuilder.java
++++ b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/KeychainModuleBuilder.java
+@@ -3,7 +3,10 @@ package com.oblador.keychain;
+ import com.facebook.react.bridge.ReactApplicationContext;
+ 
+ public class KeychainModuleBuilder {
+-  public static final boolean DEFAULT_USE_WARM_UP = true;
++  // Off: the warm-up generates a throwaway RSA key on every app start, which
++  // in a StrongBox chip (Pixel Titan M2) takes seconds, and the real unlock
++  // queues behind it in the Keystore.
++  public static final boolean DEFAULT_USE_WARM_UP = false;
+ 
+   private ReactApplicationContext reactContext;
+   private boolean useWarmUp = DEFAULT_USE_WARM_UP;
+diff --git a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreRsaEcb.java b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreRsaEcb.java
+index 5603fbf..7518bd5 100644
+--- a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreRsaEcb.java
++++ b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreRsaEcb.java
+@@ -140,11 +140,31 @@ public class CipherStorageKeystoreRsaEcb extends CipherStorageBase {
+ 
+       handler.askAccessPermissions(context);
+     } catch (final Throwable fail) {
++      // Android 12+ (keystore2) reports "user not authenticated" at doFinal,
++      // as an IllegalBlockSizeException wrapping a KeyStoreException, which
++      // CipherInputStream then wraps in an IOException. That still means
++      // "ask for the fingerprint", not "failed".
++      if (key != null && needsUserAuth(fail)) {
++        Log.d(LOG_TAG, "Unlock of keystore is needed (wrapped). Error: " + fail.getMessage(), fail);
++        handler.askAccessPermissions(new DecryptionContext(safeAlias, key, password, username));
++        return;
++      }
+       // any other exception treated as a failure
+       handler.onDecrypt(null, fail);
+     }
+   }
+ 
++  private static boolean needsUserAuth(Throwable t) {
++    for (Throwable c = t; c != null; c = c.getCause()) {
++      if (c instanceof UserNotAuthenticatedException) return true;
++      if (c instanceof javax.crypto.IllegalBlockSizeException) return true;
++      final String m = c.getMessage();
++      if (m != null && m.toLowerCase(java.util.Locale.ROOT).contains("not authenticated")) return true;
++      if (c.getCause() == c) break;
++    }
++    return false;
++  }
++
+   //endregion
+ 
+   //region Configuration

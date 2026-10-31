@@ -1,0 +1,4 @@
+*
+!.gitignore
+!release.sh
+!gen-keystore.sh

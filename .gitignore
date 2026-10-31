@@ -1,0 +1,19 @@
+.data/
+server/tmp/
+server/*.db
+*.apk
+.DS_Store
+app/dist/
+release/*.keystore
+release/keystore.env
+release/sideload-version.env
+# `go build` in server/ drops binaries next to go.mod.
+server/superpages-server
+server/superpages-admin
+# Secrets that should never land here (SMTP env, signing keys).
+*.env
+!.env.example
+*.jks
+*.p12
+*.aab
+.claude/

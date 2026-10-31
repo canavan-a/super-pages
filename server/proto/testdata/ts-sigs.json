@@ -1,0 +1,23 @@
+{
+  "key_id": "4zqjewsgy2hpyw2ts4uhbb5pggmd4acekcd7w5ts4kwsjdiczryq",
+  "request": {
+    "msg": "U1AxCkdFVAovdjEvbWUKMTcwMDAwMDAwMDAwMApub25jZQplM2IwYzQ0Mjk4ZmMxYzE0OWFmYmY0Yzg5OTZmYjkyNDI3YWU0MWU0NjQ5YjkzNGNhNDk1OTkxYjc4NTJiODU1",
+    "sig": "f1nYR6siGoQsIA-X0cJGlJunFmepEMovGtVrb4PEEo5fMEmmfSrzNyAaxl_qV38OA1dIvNsYRJtXLigRyxfBDQ"
+  },
+  "doc": {
+    "id": "AAAAAAAAAAAAAAAAAAAAAA",
+    "version": 5,
+    "epoch": 2,
+    "head": "head-ct",
+    "body": "body-ct",
+    "msg": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQXw1fDJ8YzhhYzFkNjQ4MDE3ZjJmMTIzZTg1ZGY1NTJmM2M2Y2MyODNkNTM0MDAxNWE4MDEyMDUzMWMxODcxMGViOTAxMnw2MjcyYzYyY2JmY2YzZTYxNDc1NDZmYTZkZTU3NjkzMDlmMTc0ZmM2OTY2ZjM3ZWUyNmRiMGZmZWIyMjY5ZDdm",
+    "sig": "uLIqpLqMjeQrq9tnKO15yX3Dg3eDOML-Srq7Tx6Nv40LeQqAnynM4uEPcxXfcES45fzhQNZ24aNN67R717VhAw"
+  },
+  "join": {
+    "link": "BBBBBBBBBBBBBBBBBBBBBB",
+    "doc": "AAAAAAAAAAAAAAAAAAAAAA",
+    "user": "CCCCCCCCCCCCCCCCCCCCCC",
+    "link_pub": "gKmqjm9TiV_L6RiO-WK2W6FQN3x-etW9RLLusuJ805A",
+    "proof": "eP3tIfFkeADsmCxPBmo7kc1830Qi3yAkCX1z6o9DXxYm7jX4J6cgVphBzizK_NyXykimUlzKMTbdkEm6n3S2AA"
+  }
+}
