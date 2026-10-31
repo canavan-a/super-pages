@@ -77,7 +77,7 @@ export function AvatarStack({
 
 /**
  * Who has a page open: one face per open copy (a person with two tabs shows
- * twice), each ringed in that copy's cursor color, then a "+N" chip.
+ * twice), each ringed in its person's cursor color, then a "+N" chip.
  */
 export function PresenceStack({
   viewers,

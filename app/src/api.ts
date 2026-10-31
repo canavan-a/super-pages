@@ -51,6 +51,8 @@ export async function request<T>(
   by: Signer | null,
   body?: unknown,
   timeoutMs = REQUEST_TIMEOUT_MS,
+  /** Let the request finish even if the page is closing. */
+  keepalive = false,
 ): Promise<T> {
   const text = body === undefined ? '' : JSON.stringify(body);
   const bytes = utf8(text);
@@ -67,6 +69,7 @@ export async function request<T>(
       },
       body: body === undefined ? undefined : text,
       signal: abort.signal,
+      keepalive,
     });
     out = await res.text();
   } catch (e) {
@@ -214,7 +217,6 @@ export interface LiveReq {
   since: number;
   gen?: number;
   wait?: boolean;
-  hidden?: boolean;
   leaving?: boolean;
   aware?: string;
   updates?: string[];
@@ -353,6 +355,18 @@ export const api = {
       by,
       body,
       body.wait ? 35_000 : REQUEST_TIMEOUT_MS,
+    ),
+
+  /** This tab is closing the page: sent so it outlives the page. */
+  liveLeave: (server: string, by: Signer, id: string, tab: string) =>
+    request<void>(
+      server,
+      'POST',
+      `/v1/docs/${id}/live`,
+      by,
+      {tab, since: 0, leaving: true},
+      REQUEST_TIMEOUT_MS,
+      true,
     ),
 
   leaveDoc: (server: string, by: Signer, id: string) =>

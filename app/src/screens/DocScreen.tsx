@@ -14,7 +14,7 @@ import {b64, newId, unb64} from '../crypto';
 import {DocEditor} from '../editor/DocEditor';
 import type {DocEditorRef} from '../editor/types';
 import {pickImages} from '../files';
-import {colorForTab, Live, startLive, Viewer} from '../live';
+import {colorForUser, Live, startLive, Viewer} from '../live';
 import {
   ConflictError,
   LockedError,
@@ -63,12 +63,17 @@ export function DocScreen({
   const [generation, setGeneration] = useState(0);
   const editor = useRef<DocEditorRef>(null);
 
-  // This open copy of the page, to the others: its id and color.
+  // This open copy of the page, to the others: its id, and your name and
+  // color (the same in every tab you have open).
   const tab = useRef(newId()).current;
   const me = session.get()?.me;
   const user = useMemo(
-    () => ({name: me?.name || 'Someone', color: colorForTab(tab), tab}),
-    [me?.name, tab],
+    () => ({
+      name: me?.name || 'Someone',
+      color: colorForUser(me?.id ?? ''),
+      tab,
+    }),
+    [me?.name, me?.id, tab],
   );
   const [viewers, setViewers] = useState<Viewer[]>([]);
   const live = useRef<Live | null>(null);
@@ -315,7 +320,7 @@ export function DocScreen({
       : 'Saved';
 
   // Everyone with the page open, one face per tab (yours included), each
-  // ringed in that tab's cursor color.
+  // ringed in its person's cursor color.
   const here = useMemo((): HeaderViewer[] => {
     if (!opened) return [];
     const list = viewers.some(v => v.tab === tab)
@@ -330,7 +335,7 @@ export function DocScreen({
           (m?.name || 'Someone') +
           (v.tab === tab ? ' (this tab)' : v.user === me?.id ? ' (you)' : ''),
         avatar: m?.avatar ?? null,
-        color: colorForTab(v.tab),
+        color: colorForUser(v.user),
       };
     });
   }, [viewers, opened, tab, me?.id]);

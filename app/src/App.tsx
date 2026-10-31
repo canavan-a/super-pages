@@ -66,7 +66,7 @@ export interface HeaderViewer {
   user: string;
   name: string;
   avatar: string | null;
-  /** Its cursor color, drawn as a ring around the face. */
+  /** Its person's cursor color, drawn as a ring around the face. */
   color: string;
 }
 

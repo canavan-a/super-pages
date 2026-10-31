@@ -38,9 +38,6 @@ export interface Live {
 const BATCH_MS = 80;
 const RETRY_MS = 3000;
 
-const hidden = () =>
-  typeof document !== 'undefined' && document.visibilityState === 'hidden';
-
 export function startLive(o: LiveOptions): Live {
   const s = session.require();
   let stopped = false;
@@ -100,7 +97,6 @@ export function startLive(o: LiveOptions): Live {
           since,
           gen,
           wait,
-          hidden: hidden(),
           aware,
         });
         take(r);
@@ -124,7 +120,6 @@ export function startLive(o: LiveOptions): Live {
       const r = await api.live(s.server, s.account, o.doc, {
         tab: o.tab,
         since: since < 0 ? -1 : since,
-        hidden: hidden(),
         aware,
         updates: batch.length ? batch : undefined,
       });
@@ -144,6 +139,15 @@ export function startLive(o: LiveOptions): Live {
     if (!sendTimer && !stopped) sendTimer = setTimeout(flush, BATCH_MS);
   };
 
+  // Closing the tab or browser: say so, so the others see it go at once.
+  // (A tab that just vanishes drops off the list after 30s.)
+  const leave = () =>
+    api.liveLeave(s.server, s.account, o.doc, o.tab).catch(() => {});
+  const canListen =
+    typeof window !== 'undefined' &&
+    typeof window.addEventListener === 'function';
+  if (canListen) window.addEventListener('pagehide', leave);
+
   return {
     send(change) {
       queue.push(sealLive(o.key, o.doc, o.epoch, change));
@@ -158,15 +162,17 @@ export function startLive(o: LiveOptions): Live {
       if (stopped) return;
       stopped = true;
       if (sendTimer) clearTimeout(sendTimer);
-      api
-        .live(s.server, s.account, o.doc, {tab: o.tab, since: 0, leaving: true})
-        .catch(() => {});
+      if (canListen) window.removeEventListener('pagehide', leave);
+      leave();
     },
   };
 }
 
-/** A tab's color: its cursor, and the ring around its face in the top bar. */
-const TAB_COLORS = [
+/**
+ * A person's color: their cursors (in every tab they have open), and the
+ * ring around their faces in the top bar.
+ */
+const USER_COLORS = [
   '#e5484d',
   '#f76b15',
   '#ffb224',
@@ -179,8 +185,8 @@ const TAB_COLORS = [
   '#a18072',
 ];
 
-export function colorForTab(tab: string): string {
+export function colorForUser(user: string): string {
   let h = 0;
-  for (let i = 0; i < tab.length; i++) h = (h * 31 + tab.charCodeAt(i)) >>> 0;
-  return TAB_COLORS[h % TAB_COLORS.length];
+  for (let i = 0; i < user.length; i++) h = (h * 31 + user.charCodeAt(i)) >>> 0;
+  return USER_COLORS[h % USER_COLORS.length];
 }

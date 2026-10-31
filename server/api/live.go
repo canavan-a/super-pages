@@ -19,10 +19,10 @@ import (
 // replaying or reordering them is harmless, and anything older than the
 // buffer is in the saved page already (every tab saves what it typed).
 const (
-	// A visible tab checks in every few seconds; a hidden one (browsers slow
-	// its timers to once a minute) is kept longer.
-	liveTTL       = 20 * time.Second
-	liveHiddenTTL = 100 * time.Second
+	// A tab is always checking in (each check-in waits up to liveWait), and
+	// says when it leaves; one that vanishes (a crash, a lost network) is
+	// dropped after this long.
+	liveTTL = 30 * time.Second
 	// How long a check-in with nothing new waits for something to happen.
 	liveWait = 20 * time.Second
 	// The change buffer: this long, or this many changes or bytes, per page.
@@ -44,7 +44,6 @@ type liveKey struct{ user, tab string }
 
 type liveTab struct {
 	since, seen time.Time
-	hidden      bool
 	aware       string
 }
 
@@ -87,11 +86,7 @@ func (d *liveDoc) wake() {
 func (d *liveDoc) prune(now time.Time) bool {
 	gone := false
 	for k, t := range d.tabs {
-		ttl := liveTTL
-		if t.hidden {
-			ttl = liveHiddenTTL
-		}
-		if now.Sub(t.seen) > ttl {
+		if now.Sub(t.seen) > liveTTL {
 			delete(d.tabs, k)
 			gone = true
 		}
@@ -161,7 +156,6 @@ func (h *liveHub) drop(doc, user string) {
 
 type liveReq struct {
 	Tab     string   `json:"tab"`
-	Hidden  bool     `json:"hidden"`
 	Leaving bool     `json:"leaving"`
 	Aware   string   `json:"aware"`
 	Updates []string `json:"updates"`
@@ -245,7 +239,7 @@ func (a *API) liveCheckIn(c *gin.Context) {
 		ld.tabs[k] = t
 		ld.wake()
 	}
-	t.seen, t.hidden = now, req.Hidden
+	t.seen = now
 	if req.Aware != t.aware {
 		t.aware = req.Aware
 		ld.wake()

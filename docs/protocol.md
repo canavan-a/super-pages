@@ -93,15 +93,16 @@ each member's box key with associated data `sp-dockey|<doc>`.
   again.
 
 **Live editing.** Every open copy of a page (each tab, each device) checks
-in with `POST /v1/docs/:id/live {tab, since, gen, wait, hidden, aware,
+in with `POST /v1/docs/:id/live {tab, since, gen, wait, leaving, aware,
 updates}`, with a random tab id. `updates` are the Yjs updates typed there
 and `aware` is its Yjs awareness state (its cursor, name and color), each
 sealed under the document key with ad `sp-live|<doc>|<epoch>`. The server
-keeps, in memory only: who is there (dropped after 20s without a check-in,
-100s for a hidden tab), each tab's latest `aware`, and the updates of the
+keeps, in memory only: who is there (a closing tab says `leaving`; one that
+vanishes is dropped after 30s), each tab's latest `aware`, and the updates of the
 last 3 minutes, numbered. It answers with the updates after `since` from
 other tabs, everyone there, and the saved version and epoch; with `wait`,
-it holds the answer up to 20s until something happens. A tab that fell
+it holds the answer up to 20s until something happens, a tab joining or
+leaving included, so everyone sees comings and goings at once. A tab that fell
 behind the buffer is told to `reset` and merges the saved page in again.
 View members can check in but not send updates. Each tab saves what was
 typed in it, so nothing outlives the buffer unsaved.

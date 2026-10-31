@@ -74,11 +74,31 @@ func TestLive(t *testing.T) {
 		t.Fatalf("bad tab id: %d", st)
 	}
 
-	// Leaving, and going quiet, both take a tab off the list; hidden tabs
-	// are kept longer.
+	// Leaving takes a tab off the list at once, and wakes the others.
+	go func() {
+		_, out := checkIn(viewer, map[string]any{"tab": "viewer-tab", "since": since + 2, "gen": -1, "wait": false})
+		gen := int64(out["gen"].(float64))
+		_, out = checkIn(viewer, map[string]any{"tab": "viewer-tab", "since": since + 2, "gen": gen, "wait": true})
+		done <- out
+	}()
+	time.Sleep(50 * time.Millisecond)
 	checkIn(owner, map[string]any{"tab": "owner-tab-3", "leaving": true})
-	checkIn(owner, map[string]any{"tab": "owner-tab-2", "since": -1, "hidden": true})
-	e.api.SetClock(func() time.Time { return time.Now().Add(30 * time.Second) })
+	select {
+	case out := <-done:
+		for _, v := range out["viewers"].([]any) {
+			if v.(map[string]any)["tab"] == "owner-tab-3" {
+				t.Fatalf("still listed after leaving: %v", out)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("leaving didn't wake the others")
+	}
+
+	// Going quiet takes a tab off after 30s.
+	checkIn(owner, map[string]any{"tab": "owner-tab-2", "since": -1})
+	e.api.SetClock(func() time.Time { return time.Now().Add(25 * time.Second) })
+	checkIn(owner, map[string]any{"tab": "owner-tab-2", "since": -1})
+	e.api.SetClock(func() time.Time { return time.Now().Add(40 * time.Second) })
 	_, out = checkIn(viewer, map[string]any{"tab": "viewer-tab", "since": -1})
 	var tabs []string
 	for _, v := range out["viewers"].([]any) {

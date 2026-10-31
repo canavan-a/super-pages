@@ -7,7 +7,7 @@
 // Pages are edited together: the editor is bound to a shared Yjs document
 // (the text, and the title beside it), and hands out the changes made here
 // and other tabs' cursors as bytes for the app to seal and relay (live.ts).
-import {AnyExtension, Editor} from '@tiptap/core';
+import {AnyExtension, Editor, Extension} from '@tiptap/core';
 import {Collaboration, isChangeOrigin} from '@tiptap/extension-collaboration';
 import {CollaborationCaret} from '@tiptap/extension-collaboration-caret';
 import Image from '@tiptap/extension-image';
@@ -232,7 +232,7 @@ const BASE_CSS = `
 .sp-toolbar button.on { background:var(--primary); color:var(--primary-text); }
 .sp-toolbar .sep { width:1px; margin:6px 4px; background:var(--border); flex-shrink:0; }
 .sp-scroll { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
-.sp-editor .ProseMirror { max-width:760px; margin:0 auto; padding:20px 20px 120px; outline:none; min-height:100%;
+.sp-editor .ProseMirror { tab-size:4; max-width:760px; margin:0 auto; padding:20px 20px 120px; outline:none; min-height:100%;
   box-sizing:border-box; word-wrap:break-word; }
 .ProseMirror > * + * { margin-top:0.6em; }
 .ProseMirror h1 { font-size:1.9em; line-height:1.2; margin:0.2em 0 0.4em; font-weight:800; }
@@ -290,6 +290,47 @@ const fromB64 = (s: string): Uint8Array => {
   return u;
 };
 
+/**
+ * Tab writes, as in a word processor, instead of leaving the page: in a list
+ * it indents the item (Shift-Tab outdents), anywhere else it types a tab
+ * (Shift-Tab takes back one just before the cursor).
+ */
+const TabKey = Extension.create({
+  name: 'spTab',
+  addKeyboardShortcuts() {
+    return {
+      Tab: ({editor}) => {
+        if (!editor.isEditable) return false;
+        if (editor.isActive('listItem') || editor.isActive('taskItem')) {
+          // Can't go deeper (the first item): stay put, keep focus.
+          editor.commands.sinkListItem(
+            editor.isActive('taskItem') ? 'taskItem' : 'listItem',
+          );
+          return true;
+        }
+        return editor.commands.insertContent('\t');
+      },
+      'Shift-Tab': ({editor}) => {
+        if (!editor.isEditable) return false;
+        if (editor.isActive('listItem') || editor.isActive('taskItem')) {
+          editor.commands.liftListItem(
+            editor.isActive('taskItem') ? 'taskItem' : 'listItem',
+          );
+          return true;
+        }
+        const {empty, from} = editor.state.selection;
+        if (
+          empty &&
+          from > 0 &&
+          editor.state.doc.textBetween(from - 1, from) === '\t'
+        )
+          editor.commands.deleteRange({from: from - 1, to: from});
+        return true;
+      },
+    };
+  },
+});
+
 const baseExtensions = (): AnyExtension[] => [
   // Collaboration brings its own undo history.
   StarterKit.configure({
@@ -299,6 +340,7 @@ const baseExtensions = (): AnyExtension[] => [
   Markdown,
   TaskList,
   TaskItem.configure({nested: true}),
+  TabKey,
 ];
 
 /**
