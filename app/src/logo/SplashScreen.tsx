@@ -12,11 +12,12 @@ import {
 
 import type {Theme} from '../theme';
 import {
+  LETTER_STRIPS,
   LOGO_H,
   LOGO_W,
-  PARCH,
   PIXEL_W,
-  ROLLER_H,
+  ROD_H,
+  SHEET,
   SHINE_STRIPS,
   ToneLayer,
   WORD_H,
@@ -25,13 +26,13 @@ import {
   WORD_X,
   WORD_Y,
 } from './LogoArt';
-import {SCROLL} from './scroll';
+import {CURL_REST, SCROLL} from './scroll';
 import {LOGO, ToneRuns} from './logoData';
 import {shineColor, toneColor} from './logoTheme';
 
-// The launch screen: a scroll, rolled up, unrolls, and "Super Pages" is
-// written on it, recolored for the current theme: the rollers part as the
-// parchment opens between them, the letters rise in one after another, then a
+// The launch screen, recolored for the current theme: a sheet of parchment
+// drops from its rod, the curl at its bottom corners springs flat and back,
+// "Super Pages" is written on it a letter at a time, left to right, then a
 // shine sweeps across.
 //
 // Everything animated is an opacity or a translate/scale on the native driver,
@@ -45,15 +46,78 @@ import {shineColor, toneColor} from './logoTheme';
 /** Timeline, in milliseconds. */
 export const SPLASH_TIMING = {
   unrollStart: 120,
-  unrollDur: 720,
-  letterStart: 640,
-  letterStagger: 42,
-  letterDur: 380,
-  shineStart: 1400,
-  shineDur: 950,
+  unrollDur: 600,
+  curlStart: 680,
+  curlDur: 320,
+  letterStart: 1000,
+  letterStagger: 70,
+  letterDur: 200,
+  shineStart: 1850,
+  shineDur: 780,
   hold: 2650, // when the exit fade begins
   exit: 350,
 };
+
+/** How long writing the whole word takes. */
+const WRITE_DUR =
+  (LOGO.word.slices.length - 1) * SPLASH_TIMING.letterStagger +
+  SPLASH_TIMING.letterDur;
+
+/** How long one strip of a letter takes to appear once the pen reaches it. */
+const STROKE_MS = 40;
+
+/** When (0..1 of the writing) strip s of the wordmark appears. */
+export function writeRange(s: {letter: number; at: number}): [number, number] {
+  const T = SPLASH_TIMING;
+  const eps = STROKE_MS / WRITE_DUR;
+  const t = (s.letter * T.letterStagger + s.at * T.letterDur) / WRITE_DUR;
+  const a = Math.min(t, 1 - eps);
+  return [a, a + eps];
+}
+
+/**
+ * The corner curl's size through its spring (0..1): at rest, flattening to
+ * a single row, and back. The input/output ranges for showing the layer of
+ * the given size, as near-steps (an interpolation can't jump).
+ */
+export function curlRange(size: number): {input: number[]; output: number[]} {
+  // The curl is round(REST - (REST - 1) sin(pi p)) rows at p: it shows this
+  // size while sin(pi p) is between these two...
+  const R = CURL_REST;
+  const sLow = (R - size - 0.5) / (R - 1);
+  const sHigh = (R - size + 0.5) / (R - 1);
+  // ...which happens from p = from to p = to on the way down, and mirrored on
+  // the way back up.
+  const at = (v: number) => Math.asin(v) / Math.PI;
+  const from = sLow <= 0 ? 0 : at(Math.min(1, sLow));
+  const to = sHigh >= 1 ? 0.5 : at(Math.max(0, sHigh));
+  const spans: [number, number][] =
+    to >= 0.5
+      ? [[from, 1 - from]] // the flattest: one span across the middle
+      : [
+          [from, to],
+          [1 - to, 1 - from],
+        ];
+  const eps = 0.004;
+  const input: number[] = [];
+  const output: number[] = [];
+  const push = (x: number, y: number) => {
+    input.push(x);
+    output.push(y);
+  };
+  if (spans[0][0] > 0) push(0, 0);
+  for (const [lo, hi] of spans) {
+    if (lo > 0) {
+      push(lo - eps, 0);
+      push(lo, 1);
+    } else push(0, 1);
+    if (hi < 1) {
+      push(hi, 1);
+      push(hi + eps, 0);
+    } else push(1, 1);
+  }
+  return {input, output};
+}
 
 /** How much of the way toward the shine target the highlight colors go. */
 const SHINE_STRENGTH = 0.7;
@@ -119,14 +183,16 @@ export function SplashScreen({
   // every render and throw all but the first away.)
   const values = useRef<{
     unroll: Animated.Value;
-    letters: Animated.Value[];
+    curl: Animated.Value;
+    write: Animated.Value;
     shine: Animated.Value;
     exit: Animated.Value;
   } | null>(null);
   if (!values.current) {
     values.current = {
       unroll: new Animated.Value(reduce ? 1 : 0),
-      letters: LOGO.word.slices.map(() => new Animated.Value(reduce ? 1 : 0)),
+      curl: new Animated.Value(reduce ? 1 : 0),
+      write: new Animated.Value(reduce ? 1 : 0),
       shine: new Animated.Value(0),
       exit: new Animated.Value(1),
     };
@@ -206,7 +272,8 @@ export function SplashScreen({
     loop.start();
   };
 
-  // The intro: letters in, one shine, then the rest of the hold time.
+  // The intro: the drop, the curl, the writing, one shine, then the rest of
+  // the hold time.
   useEffect(() => {
     const T = SPLASH_TIMING;
     const animation = reduce
@@ -219,9 +286,8 @@ export function SplashScreen({
             T.unrollStart,
             Easing.out(Easing.cubic),
           ),
-          ...v.letters.map((l, i) =>
-            timing(l, 1, T.letterDur, T.letterStart + i * T.letterStagger),
-          ),
+          timing(v.curl, 1, T.curlDur, T.curlStart, Easing.linear),
+          timing(v.write, 1, WRITE_DUR, T.letterStart, Easing.linear),
           timing(
             v.shine,
             1,
@@ -271,34 +337,63 @@ export function SplashScreen({
   );
 
   const wordH = WORD_H * scale;
-  const rollerH = ROLLER_H * scale;
-  const parchH = PARCH.h * scale;
-  // Rolled up, the two rollers meet in the middle; unrolling, they part as
-  // the parchment between them grows from a line to full height. Translate
-  // and scale only, so it all runs on the native driver.
-  const rollerTop = useMemo(
-    () =>
-      v.unroll.interpolate({inputRange: [0, 1], outputRange: [parchH / 2, 0]}),
-    [v, parchH],
+  const rodH = ROD_H * scale;
+  const sheetH = SHEET.h * scale;
+  // The sheet drops from the rod: it grows from a line under the rod to full
+  // height, and the curled corners ride its bottom edge. Translate, scale
+  // and opacity only, so it all runs on the native driver.
+  const drop = useMemo(
+    () => ({
+      scale: v.unroll.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0.001, 1],
+      }),
+      shift: v.unroll.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-sheetH / 2, 0],
+      }),
+      bottom: v.unroll.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-sheetH, 0],
+      }),
+      curlIn: v.unroll.interpolate({
+        inputRange: [0, 0.15],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+      }),
+    }),
+    [v, sheetH],
   );
-  const rollerBottom = useMemo(
+  const curls = useMemo(
     () =>
-      v.unroll.interpolate({inputRange: [0, 1], outputRange: [-parchH / 2, 0]}),
-    [v, parchH],
-  );
-  const parchScale = useMemo(
-    () => v.unroll.interpolate({inputRange: [0, 1], outputRange: [0.001, 1]}),
+      SCROLL.curls.map((_, size) => {
+        if (size === 0) return null;
+        const {input, output} = curlRange(size);
+        return v.curl.interpolate({
+          inputRange: input,
+          outputRange: output,
+          extrapolate: 'clamp',
+        });
+      }),
     [v],
   );
-  const roller = (
-    <ToneLayer
-      tones={SCROLL.roller.tones}
-      fill={base}
-      view={[0, 0, LOGO_W, ROLLER_H]}
-      width={W}
-      height={rollerH}
-    />
+  const strokes = useMemo(
+    () =>
+      LETTER_STRIPS.map(s =>
+        v.write.interpolate({
+          inputRange: writeRange(s),
+          outputRange: [0, 1],
+          extrapolate: 'clamp',
+        }),
+      ),
+    [v],
   );
+  const sheetBox = {
+    left: SHEET.x * scale,
+    top: SHEET.y * scale,
+    width: SHEET.w * scale,
+    height: sheetH,
+  };
 
   const strips = () =>
     WORD_STRIPS.map((s, i) =>
@@ -344,21 +439,46 @@ export function SplashScreen({
           <Animated.View
             style={[
               styles.abs,
-              {
-                left: PARCH.x * scale,
-                top: PARCH.y * scale,
-                width: PARCH.w * scale,
-                height: parchH,
-                transform: [{scaleY: parchScale}],
-              },
+              sheetBox,
+              {transform: [{translateY: drop.shift}, {scaleY: drop.scale}]},
             ]}>
             <ToneLayer
-              tones={SCROLL.parchment.tones}
+              tones={SCROLL.sheet.tones}
               fill={base}
-              view={[0, 0, PARCH.w, PARCH.h]}
-              width={PARCH.w * scale}
-              height={parchH}
+              view={[0, 0, SHEET.w, SHEET.h]}
+              width={SHEET.w * scale}
+              height={sheetH}
             />
+          </Animated.View>
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.abs,
+              sheetBox,
+              {opacity: drop.curlIn, transform: [{translateY: drop.bottom}]},
+            ]}>
+            {SCROLL.curls.map((tones, size) =>
+              size === 0 ? null : (
+                <Animated.View
+                  key={size}
+                  style={[
+                    styles.abs,
+                    {
+                      width: SHEET.w * scale,
+                      height: sheetH,
+                      opacity: curls[size]!,
+                    },
+                  ]}>
+                  <ToneLayer
+                    tones={tones}
+                    fill={base}
+                    view={[0, 0, SHEET.w, SHEET.h]}
+                    width={SHEET.w * scale}
+                    height={sheetH}
+                  />
+                </Animated.View>
+              ),
+            )}
           </Animated.View>
           <View
             style={[
@@ -370,7 +490,7 @@ export function SplashScreen({
                 height: wordH,
               },
             ]}>
-            {LOGO.word.slices.map((s, i) => (
+            {LETTER_STRIPS.map((s, i) => (
               <Animated.View
                 key={i}
                 style={[
@@ -380,15 +500,7 @@ export function SplashScreen({
                     top: 0,
                     width: (s.x1 - s.x0) * PIXEL_W * scale,
                     height: wordH,
-                    opacity: v.letters[i],
-                    transform: [
-                      {
-                        translateY: v.letters[i].interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [14, 0],
-                        }),
-                      },
-                    ],
+                    opacity: strokes[i],
                   },
                 ]}>
                 <ToneLayer
@@ -409,25 +521,15 @@ export function SplashScreen({
               </View>
             )}
           </View>
-          <Animated.View
-            style={[
-              styles.abs,
-              {width: W, height: rollerH, transform: [{translateY: rollerTop}]},
-            ]}>
-            {roller}
-          </Animated.View>
-          <Animated.View
-            style={[
-              styles.abs,
-              {
-                top: H - rollerH,
-                width: W,
-                height: rollerH,
-                transform: [{translateY: rollerBottom}],
-              },
-            ]}>
-            {roller}
-          </Animated.View>
+          <View style={[styles.abs, {width: W, height: rodH}]}>
+            <ToneLayer
+              tones={SCROLL.rod.tones}
+              fill={base}
+              view={[0, 0, LOGO_W, ROD_H]}
+              width={W}
+              height={rodH}
+            />
+          </View>
         </View>
       </Pressable>
     </Animated.View>

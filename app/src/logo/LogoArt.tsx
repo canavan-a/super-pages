@@ -3,7 +3,7 @@ import {StyleSheet, View} from 'react-native';
 import Svg, {G, Path} from 'react-native-svg';
 
 import {LOGO, ToneRuns} from './logoData';
-import {SCROLL} from './scroll';
+import {CURL_REST, SCROLL} from './scroll';
 import {toneColor} from './logoTheme';
 import {useTheme} from '../theme';
 
@@ -16,18 +16,18 @@ export const PIXEL_H = 4;
 /** The stacked wordmark's size in viewBox units. */
 export const WORD_W = LOGO.width * PIXEL_W;
 export const WORD_H = LOGO.word.rows * PIXEL_H;
-/** The whole logo: the open scroll with the wordmark on it (scroll.ts). */
+/** The whole logo: the hanging sheet with the wordmark on it (scroll.ts). */
 export const LOGO_W = SCROLL.width * PIXEL_W;
 export const LOGO_H = SCROLL.height * PIXEL_H;
 /** Where the wordmark sits on the scroll, in viewBox units. */
 export const WORD_X = SCROLL.word.x * PIXEL_W;
 export const WORD_Y = SCROLL.word.y * PIXEL_H;
-export const ROLLER_H = SCROLL.roller.rows * PIXEL_H;
-export const PARCH = {
-  x: SCROLL.parchment.x * PIXEL_W,
-  y: SCROLL.parchment.y * PIXEL_H,
-  w: SCROLL.parchment.w * PIXEL_W,
-  h: SCROLL.parchment.h * PIXEL_H,
+export const ROD_H = SCROLL.rod.rows * PIXEL_H;
+export const SHEET = {
+  x: SCROLL.sheet.x * PIXEL_W,
+  y: SCROLL.sheet.y * PIXEL_H,
+  w: SCROLL.sheet.w * PIXEL_W,
+  h: SCROLL.sheet.h * PIXEL_H,
 };
 
 // Adjacent rectangles overlap by a hair so no seams show between pixels when
@@ -102,6 +102,22 @@ export const STRIP_SPANS: {x0: number; x1: number}[] = Array.from(
   }),
 );
 
+/** How many columns of a letter are written at a time. */
+const PEN = 3;
+
+/**
+ * Each letter cut into narrow upright strips, left to right, so the splash
+ * can write it: letter is its index, at how far along it (0..1) the strip is.
+ */
+export const LETTER_STRIPS = LOGO.word.slices.flatMap((s, letter) => {
+  const n = Math.ceil((s.x1 - s.x0) / PEN);
+  return Array.from({length: n}, (_, j) => {
+    const x0 = s.x0 + j * PEN;
+    const x1 = Math.min(s.x1, x0 + PEN);
+    return {letter, at: j / n, x0, x1, tones: sliceTones(s.tones, x0, x1)};
+  }).filter(p => p.tones.length > 0);
+});
+
 /** Each strip's share of the wordmark. */
 export const WORD_STRIPS = STRIP_SPANS.map(s => ({
   ...s,
@@ -154,7 +170,7 @@ interface FullProps {
   height: number;
 }
 
-/** The whole logo (the open scroll, the stacked wordmark on it) in one SVG. */
+/** The whole logo (the hanging sheet, the stacked wordmark on it) in one SVG. */
 export const FullLogo = memo(function FullLogo({
   fill,
   width,
@@ -166,19 +182,17 @@ export const FullLogo = memo(function FullLogo({
       width={width}
       height={height}
       viewBox={`0 0 ${LOGO_W} ${LOGO_H}`}>
-      <G>
-        {SCROLL.roller.tones.map(t => (
-          <Path key={`rt${t.u}/${t.w}`} d={tonePath(t)} fill={fill(t)} />
-        ))}
-      </G>
-      <G transform={`translate(${PARCH.x} ${PARCH.y})`}>
-        {SCROLL.parchment.tones.map(t => (
+      <G transform={`translate(${SHEET.x} ${SHEET.y})`}>
+        {SCROLL.sheet.tones.map(t => (
           <Path key={`p${t.u}/${t.w}`} d={tonePath(t)} fill={fill(t)} />
         ))}
+        {SCROLL.curls[CURL_REST].map(t => (
+          <Path key={`c${t.u}/${t.w}`} d={tonePath(t)} fill={fill(t)} />
+        ))}
       </G>
-      <G transform={`translate(0 ${LOGO_H - ROLLER_H})`}>
-        {SCROLL.roller.tones.map(t => (
-          <Path key={`rb${t.u}/${t.w}`} d={tonePath(t)} fill={fill(t)} />
+      <G>
+        {SCROLL.rod.tones.map(t => (
+          <Path key={`r${t.u}/${t.w}`} d={tonePath(t)} fill={fill(t)} />
         ))}
       </G>
       <G transform={`translate(${WORD_X} ${WORD_Y})`}>

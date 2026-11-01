@@ -1,75 +1,137 @@
-// The scroll the logo sits on: two rollers and the parchment between them,
-// built here as tone runs (the same sub-pixels and tones as art/mark.txt,
-// which is the launcher icon) but sized to fit the stacked wordmark, so the
-// splash can unroll it and the words appear written on it.
+// The scroll the logo sits on: one sheet of parchment hanging from a rod,
+// its sides a little ragged and its bottom corners curled up, built here as
+// tone runs (the same sub-pixels and tones as the wordmark) sized to fit the
+// stacked wordmark, so the splash can drop it and write the words on it.
 import {LOGO, ToneRuns} from './logoData';
 
-// The art legend's tones (tools/appart): rollers, parchment.
-const TONES: Record<string, {u: number; w: number}> = {
-  A: {u: 4, w: 1},
-  B: {u: 3.8333, w: 0.5},
-  C: {u: 4, w: 0.5},
-  '1': {u: 1, w: 0},
-  '2': {u: 1.5, w: 0},
-  '3': {u: 2, w: 0},
-};
+/** Parchment margin around the wordmark, in sub-pixels. */
+const PAD_X = 8;
+const PAD_Y = 6;
+/** How far the rod's knobs reach past the sheet on each side. */
+const KNOB = 3;
+const ROD_ROWS = 5;
+/** The corner curl at rest, in rows; the splash springs it flat and back. */
+export const CURL_REST = 4;
 
-function runsOf(grid: string[]): ToneRuns[] {
-  const by = new Map<string, number[]>();
-  grid.forEach((row, y) => {
-    for (let x = 0; x < row.length; ) {
-      const c = row[x];
-      if (c === '.') {
-        x++;
-        continue;
+const sheetW = LOGO.width + 2 * PAD_X;
+const sheetH = LOGO.word.rows + 2 * PAD_Y;
+const width = sheetW + 2 * KNOB;
+
+/** Cells (x, y, u, w) grouped into tone runs. */
+function toRuns(cells: [number, number, number, number][]): ToneRuns[] {
+  const by = new Map<
+    string,
+    {u: number; w: number; rows: Map<number, number[]>}
+  >();
+  for (const [x, y, u, w] of cells) {
+    const k = `${u}/${w}`;
+    if (!by.has(k)) by.set(k, {u, w, rows: new Map()});
+    const rows = by.get(k)!.rows;
+    if (!rows.has(y)) rows.set(y, []);
+    rows.get(y)!.push(x);
+  }
+  return Array.from(by.values(), ({u, w, rows}) => {
+    const runs: number[] = [];
+    for (const [y, xs] of Array.from(rows).sort((a, b) => a[0] - b[0])) {
+      xs.sort((a, b) => a - b);
+      for (let i = 0; i < xs.length; ) {
+        let n = 1;
+        while (xs[i + n] === xs[i] + n) n++;
+        runs.push(xs[i], y, n);
+        i += n;
       }
-      let n = 1;
-      while (row[x + n] === c) n++;
-      if (!by.has(c)) by.set(c, []);
-      by.get(c)!.push(x, y, n);
-      x += n;
     }
+    return {u, w, runs};
   });
-  return Array.from(by, ([c, runs]) => ({...TONES[c], runs}));
 }
 
-/** Parchment margin around the wordmark, in sub-pixels. */
-const PAD_X = 7;
-const PAD_Y = 5;
-/** How far the rollers reach past the parchment on each side. */
-const KNOB = 4;
-const ROLLER_ROWS = 5;
+/** Repeatable randomness, so the sheet looks the same everywhere. */
+function rng(seed: number) {
+  return () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+}
 
-const parchW = LOGO.width + 2 * PAD_X;
-const parchH = LOGO.word.rows + 2 * PAD_Y;
-const width = parchW + 2 * KNOB;
-const inner = width - 2 * KNOB;
+// Each row's sides step in by a sub-pixel now and then: a hand-cut edge.
+const rag: [number, number][] = [];
+{
+  const r = rng(21);
+  let l = 0;
+  let rt = 0;
+  for (let y = 0; y < sheetH; y++) {
+    if (r() < 0.35) l = l ? 0 : 1;
+    if (r() < 0.35) rt = rt ? 0 : 1;
+    rag.push([l, rt]);
+  }
+}
 
-const roller = [
-  '.AAA' + '.'.repeat(inner) + 'AAA.',
-  'AAAA' + 'B'.repeat(inner) + 'AAAA',
-  'AAAA' + 'A'.repeat(inner) + 'AAAA',
-  'AAAA' + 'C'.repeat(inner) + 'AAAA',
-  '.AAA' + '.'.repeat(inner) + 'AAA.',
-];
+// The sheet: surface tone, a darker rim on the sides and bottom, the rod's
+// shadow across the top, and a few fibres.
+const sheetCells: [number, number, number, number][] = [];
+{
+  const fibre = rng(4);
+  for (let y = 0; y < sheetH; y++) {
+    const [l, r] = rag[y];
+    for (let x = l; x < sheetW - r; x++) {
+      const rim = x === l || x === sheetW - r - 1 || y === sheetH - 1;
+      let u = rim ? 2 : 1;
+      if (!rim && y < 3) u = [1.7, 1.4, 1.15][y];
+      if (!rim && fibre() < 0.012) u = 1.3;
+      sheetCells.push([x, y, u, 0]);
+    }
+  }
+}
 
-const parchment = Array.from(
-  {length: parchH},
-  (_, y) => '3' + (y === 0 ? '2' : '1').repeat(parchW - 2) + '3',
-);
+/**
+ * The bottom corners curled up, `size` rows tall: a triangle of the back of
+ * the paper at each, lighter toward the fold. In the sheet's coordinates.
+ */
+function curl(size: number): ToneRuns[] {
+  const cells: [number, number, number, number][] = [];
+  const [l, r] = rag[sheetH - 1];
+  for (let k = 0; k < size; k++) {
+    const y = sheetH - 1 - (size - 1 - k);
+    for (let j = 0; j <= k * 2; j++) {
+      const u =
+        j === k * 2 ? 2.8 : Math.round((2 + (j / (k * 2 + 1)) * 0.5) * 12) / 12;
+      cells.push([l + j, y, u, 0], [sheetW - 1 - r - j, y, u, 0]);
+    }
+  }
+  return toRuns(cells);
+}
+
+// The rod, in the accent: three rows across, its knobs five rows tall.
+const rodCells: [number, number, number, number][] = [];
+{
+  const tones: [number, number][] = [
+    [3.8333, 0.5],
+    [4, 1],
+    [4, 1],
+    [4, 0.5],
+    [3.6, 0.5],
+  ];
+  for (let y = 0; y < ROD_ROWS; y++) {
+    for (let x = 0; x < width; x++) {
+      const knob = x < KNOB || x >= width - KNOB;
+      const edgeRow = y === 0 || y === ROD_ROWS - 1;
+      if (edgeRow && (!knob || x === 0 || x === width - 1)) continue;
+      rodCells.push([x, y, ...tones[y]]);
+    }
+  }
+}
 
 export const SCROLL = {
   /** Total size in sub-pixels, open. */
   width,
-  height: ROLLER_ROWS * 2 + parchH,
-  roller: {rows: ROLLER_ROWS, tones: runsOf(roller)},
-  parchment: {
+  height: ROD_ROWS + sheetH,
+  rod: {rows: ROD_ROWS, tones: toRuns(rodCells)},
+  sheet: {
     x: KNOB,
-    y: ROLLER_ROWS,
-    w: parchW,
-    h: parchH,
-    tones: runsOf(parchment),
+    y: ROD_ROWS,
+    w: sheetW,
+    h: sheetH,
+    tones: toRuns(sheetCells),
   },
+  /** The corner curls by size (1..CURL_REST rows), in the sheet's coordinates. */
+  curls: Array.from({length: CURL_REST + 1}, (_, size) => curl(size)),
   /** Where the wordmark sits, in sub-pixels. */
-  word: {x: KNOB + PAD_X, y: ROLLER_ROWS + PAD_Y},
+  word: {x: KNOB + PAD_X, y: ROD_ROWS + PAD_Y},
 };

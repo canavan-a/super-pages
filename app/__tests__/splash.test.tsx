@@ -17,7 +17,8 @@ import {
   SPLASH_TOTAL,
   SplashScreen,
 } from '../src/logo/SplashScreen';
-import {WORD_STRIPS} from '../src/logo/LogoArt';
+import {LETTER_STRIPS, WORD_STRIPS} from '../src/logo/LogoArt';
+import {CURL_REST} from '../src/logo/scroll';
 import {settingsStore} from '../src/settings';
 import {ThemeProvider, THEMES} from '../src/theme';
 
@@ -72,10 +73,13 @@ describe('SplashScreen', () => {
       n => typeof n.props?.viewBox === 'string' && n.props.width !== undefined,
     ).length;
 
-  it('draws the whole logo: the scroll, ten letters and the shine strips', () => {
+  it('draws the whole logo: the sheet, its curls, the rod, the letters and the shine', () => {
     const tree = mount(() => {});
     const strips = WORD_STRIPS.filter(s => s.tones.length > 0).length;
-    expect(svgCount(tree)).toBe(10 + 3 + strips); // letters, parchment and two rollers, strips
+    // sheet, a layer per curl size, rod, the letters' pen strokes, shine strips
+    expect(svgCount(tree)).toBe(
+      1 + CURL_REST + 1 + LETTER_STRIPS.length + strips,
+    );
     act(() => tree.unmount());
   });
 

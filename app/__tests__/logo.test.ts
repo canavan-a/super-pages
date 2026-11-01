@@ -17,9 +17,13 @@ import {
 import {
   SPLASH_TIMING,
   SPLASH_TOTAL,
+  curlRange,
   pulseRange,
+  writeRange,
 } from '../src/logo/SplashScreen';
+import {CURL_REST, SCROLL} from '../src/logo/scroll';
 import {
+  LETTER_STRIPS,
   SHINE_STRIPS,
   STRIP_SPANS,
   WORD_STRIPS,
@@ -224,6 +228,75 @@ describe('shine strips', () => {
   });
 });
 
+describe('the hanging sheet', () => {
+  const at = (r: {input: number[]; output: number[]}, p: number) => {
+    const {input: x, output: y} = r;
+    if (p <= x[0]) return y[0];
+    for (let i = 1; i < x.length; i++)
+      if (p <= x[i])
+        return (
+          y[i - 1] + ((y[i] - y[i - 1]) * (p - x[i - 1])) / (x[i] - x[i - 1])
+        );
+    return y[y.length - 1];
+  };
+  const sizes = Array.from({length: CURL_REST}, (_, i) => i + 1);
+
+  it('springs its curl through valid, strictly increasing ranges', () => {
+    for (const k of sizes) {
+      const {input} = curlRange(k);
+      expect(input[0]).toBeGreaterThanOrEqual(0);
+      expect(input[input.length - 1]).toBeLessThanOrEqual(1);
+      for (let i = 1; i < input.length; i++)
+        expect(input[i]).toBeGreaterThan(input[i - 1]);
+    }
+  });
+
+  it('shows one curl at a time: at rest, flattening to one row, and back', () => {
+    const shown = (p: number) => sizes.filter(k => at(curlRange(k), p) > 0.5);
+    expect(shown(0)).toEqual([CURL_REST]);
+    expect(shown(0.5)).toEqual([1]);
+    expect(shown(1)).toEqual([CURL_REST]);
+    for (let p = 0; p <= 1; p += 0.01) expect(shown(p)).toHaveLength(1);
+  });
+
+  it('has every curl size drawn, growing with its size', () => {
+    let last = 0;
+    for (const k of sizes) {
+      const n = SCROLL.curls[k].reduce((a, t) => a + t.runs.length / 3, 0);
+      expect(n).toBeGreaterThan(last);
+      last = n;
+    }
+  });
+
+  it('writes each letter left to right, the letters in order', () => {
+    const last = new Map<number, number>();
+    let firstOfLast = -1;
+    for (const st of LETTER_STRIPS) {
+      const [a, b] = writeRange(st);
+      expect(a).toBeGreaterThanOrEqual(0);
+      expect(b).toBeLessThanOrEqual(1);
+      expect(a).toBeLessThan(b);
+      if (last.has(st.letter)) expect(a).toBeGreaterThan(last.get(st.letter)!);
+      else {
+        // a new letter starts after the one before it did
+        expect(a).toBeGreaterThan(firstOfLast);
+        firstOfLast = a;
+      }
+      last.set(st.letter, a);
+    }
+  });
+
+  it("writes exactly the wordmark's pixels", () => {
+    const ink = (tones: {runs: number[]}[]) =>
+      tones.reduce(
+        (n, t) =>
+          n + t.runs.filter((_, i) => i % 3 === 2).reduce((a, b) => a + b, 0),
+        0,
+      );
+    expect(ink(LETTER_STRIPS.flatMap(s => s.tones))).toBe(ink(WORD_TONES));
+  });
+});
+
 describe('splash timeline', () => {
   const T = SPLASH_TIMING;
   it('brings the letters in before the shine starts, and the shine finishes before the exit', () => {
@@ -232,6 +305,8 @@ describe('splash timeline', () => {
       (LOGO.word.slices.length - 1) * T.letterStagger +
       T.letterDur;
     expect(lettersDone).toBeLessThanOrEqual(T.shineStart);
+    expect(T.unrollStart + T.unrollDur).toBeLessThanOrEqual(T.curlStart + 100);
+    expect(T.curlStart + T.curlDur).toBeLessThanOrEqual(T.letterStart);
     expect(T.shineStart + T.shineDur).toBeLessThanOrEqual(T.hold);
   });
   it('is short enough not to be annoying', () => {
