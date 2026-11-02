@@ -1,8 +1,9 @@
 import React from 'react';
-import {ActivityIndicator, StyleSheet, Text, View} from 'react-native';
+import {StyleSheet, Text, View} from 'react-native';
 
 import {Theme, useTheme} from '../theme';
 import {Icon} from './Icon';
+import {TypingDots} from './TypingDots';
 
 export type NoticeKind = 'success' | 'error' | 'working' | 'info';
 
@@ -33,7 +34,7 @@ export function Notice({
       ]}>
       <View style={styles.row}>
         {kind === 'working' ? (
-          <ActivityIndicator size="small" color={color} />
+          <TypingDots color={color} size={5} />
         ) : (
           <Icon
             name={

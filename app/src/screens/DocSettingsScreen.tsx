@@ -1,6 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   Share,
@@ -16,6 +15,7 @@ import {Avatar} from '../components/Avatar';
 import {Icon} from '../components/Icon';
 import {Notice} from '../components/Notice';
 import {roleLabel, RolePicker, ROLES} from '../components/RolePicker';
+import {TypingDots} from '../components/TypingDots';
 import {
   cancelPending,
   createLink,
@@ -108,7 +108,7 @@ export function DocSettingsScreen({
             {error}
           </Notice>
         ) : (
-          <ActivityIndicator color={theme.textMuted} />
+          <TypingDots color={theme.textMuted} />
         )}
       </View>
     );

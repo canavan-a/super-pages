@@ -62,7 +62,11 @@ export function openHead(
   ct: string,
 ): DocHead {
   const h = JSON.parse(unutf8(aeadOpen(key, unb64(ct), headAd(doc, epoch))));
-  return {title: String(h?.title ?? ''), snippet: String(h?.snippet ?? '')};
+  // Heads sealed before entities were decoded can still hold "&nbsp;".
+  const snippet = decodeEntities(String(h?.snippet ?? ''))
+    .replace(/[ \t ]+/g, ' ')
+    .trim();
+  return {title: String(h?.title ?? ''), snippet};
 }
 
 export function sealBody(
@@ -190,26 +194,59 @@ export function decodeBody(text: string): DocBody {
 
 // ---- head from markdown ----
 
+const ENTITIES: Record<string, string> = {
+  nbsp: ' ',
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+/** HTML entities decoded; the editor writes a blank line as "&nbsp;". */
+export function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+    if (e[0] !== '#') return ENTITIES[e.toLowerCase()] ?? m;
+    const n =
+      e[1] === 'x' || e[1] === 'X'
+        ? parseInt(e.slice(2), 16)
+        : parseInt(e.slice(1), 10);
+    if (n === 0xa0) return ' ';
+    return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
+  });
+}
+
 /** Plain text of a markdown line: formatting marks and image links dropped. */
 export function plainText(md: string): string {
-  return md
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/^\s{0,3}(#{1,6}|>|[-*+]\s+\[[ xX]\]|[-*+]|\d+[.)])\s*/gm, '')
-    .replace(/(\*\*|__|\*|_|~~|`)/g, '')
-    .replace(/<[^>]+>/g, '')
-    .trim();
+  return decodeEntities(
+    md
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/^\s{0,3}(#{1,6}|>|[-*+]\s+\[[ xX]\]|[-*+]|\d+[.)])\s*/gm, '')
+      .replace(/(\*\*|__|\*|_|~~|`)/g, '')
+      .replace(/<[^>]+>/g, ''),
+  ).trim();
 }
 
 /** The head: the page's own title (set apart from its text) and a snippet of the text for the grid. */
 export function makeHead(title: string, md: string): DocHead {
-  const snippet = md
-    .split('\n')
-    .map(plainText)
-    .filter(l => l.length > 0)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .slice(0, 280);
+  // Each paragraph on its own line, and the editor's empty paragraphs
+  // ("&nbsp;") kept as blank lines, so the grid shows the page's shape.
+  const blocks: string[] = [];
+  for (const block of md.split(/\n[ \t]*\n/)) {
+    if (/^\s*(&nbsp;|&#160;| )\s*$/i.test(block)) {
+      if (blocks.length > 0) blocks.push('');
+      continue;
+    }
+    const text = block
+      .split('\n')
+      .map(l => plainText(l).replace(/[ \t ]+/g, ' '))
+      .filter(l => l.length > 0)
+      .join('\n');
+    if (text) blocks.push(text);
+  }
+  while (blocks[blocks.length - 1] === '') blocks.pop();
+  const snippet = blocks.join('\n').slice(0, 280);
   return {title: title.trim().slice(0, 120), snippet};
 }
 

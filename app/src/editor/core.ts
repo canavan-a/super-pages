@@ -14,7 +14,7 @@ import Image from '@tiptap/extension-image';
 import {TaskItem, TaskList} from '@tiptap/extension-list';
 import {Placeholder} from '@tiptap/extensions';
 import {Markdown} from '@tiptap/markdown';
-import {Selection} from '@tiptap/pm/state';
+import {NodeSelection, Selection} from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import {prosemirrorJSONToYXmlFragment} from '@tiptap/y-tiptap';
 import {
@@ -107,13 +107,34 @@ export interface EditorHandle {
 function secureImage(resolve: (url: string) => Promise<string>) {
   return Image.extend({
     addNodeView() {
-      return ({node}) => {
+      return ({node, editor, getPos}) => {
         const wrap = document.createElement('figure');
         wrap.className = 'sp-figure';
+        const frame = document.createElement('span');
+        frame.className = 'sp-figure-frame';
         const img = document.createElement('img');
         img.alt = node.attrs.alt ?? '';
         img.draggable = false;
-        wrap.appendChild(img);
+        frame.appendChild(img);
+        // Shown while the image is selected: the only way to remove one on
+        // a phone, where there's no backspace without the keyboard up.
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'sp-figure-del';
+        del.textContent = '✕';
+        del.setAttribute('aria-label', 'Remove image');
+        del.addEventListener('mousedown', e => e.preventDefault());
+        del.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const pos = getPos();
+          const n = typeof pos === 'number' && editor.state.doc.nodeAt(pos);
+          if (!editor.isEditable || !n) return;
+          editor.view.dispatch(editor.state.tr.delete(pos!, pos! + n.nodeSize));
+        });
+        frame.appendChild(del);
+        wrap.appendChild(frame);
+        touchDrag(wrap, del, editor, getPos);
         const src: string = node.attrs.src ?? '';
         if (src.startsWith('sp-img:')) {
           wrap.classList.add('loading');
@@ -131,10 +152,167 @@ function secureImage(resolve: (url: string) => Promise<string>) {
         } else {
           wrap.classList.add('broken');
         }
-        return {dom: wrap};
+        return {
+          dom: wrap,
+          stopEvent: e => del.contains(e.target as Node),
+        };
       };
     },
   }).configure({inline: false, allowBase64: false});
+}
+
+const LONG_PRESS_MS = 350;
+const TAP_SLOP = 8;
+const EDGE = 60;
+
+/**
+ * Touch handling for an image: a tap selects it (without raising the
+ * keyboard), and a long press picks it up to drag between blocks, with a
+ * line showing where it will land. HTML5 drag and drop, which the mouse
+ * uses, barely works with a finger.
+ */
+function touchDrag(
+  wrap: HTMLElement,
+  del: HTMLElement,
+  editor: Editor,
+  getPos: () => number | undefined,
+): void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let start: {x: number; y: number} | null = null;
+  let finger = {x: 0, y: 0};
+  let touching = false;
+  let dragging = false;
+  let target: number | null = null;
+  let line: HTMLElement | null = null;
+  let frame = 0;
+
+  const select = () => {
+    const pos = getPos();
+    if (typeof pos === 'number') editor.commands.setNodeSelection(pos);
+  };
+
+  // The gap between top-level blocks nearest the finger, and where to draw it.
+  const dropAt = (x: number, y: number): {pos: number; top: number} | null => {
+    const {view} = editor;
+    const hit = view.posAtCoords({left: x, top: y});
+    if (!hit) return null;
+    const $pos = view.state.doc.resolve(hit.pos);
+    let before: number;
+    if ($pos.depth > 0) before = $pos.before(1);
+    else if ($pos.nodeAfter) before = $pos.pos;
+    else if ($pos.nodeBefore) before = $pos.pos - $pos.nodeBefore.nodeSize;
+    else return null;
+    const block = view.state.doc.nodeAt(before);
+    const dom = view.nodeDOM(before) as HTMLElement | null;
+    if (!block || !dom?.getBoundingClientRect) return null;
+    const r = dom.getBoundingClientRect();
+    return y < r.top + r.height / 2
+      ? {pos: before, top: r.top}
+      : {pos: before + block.nodeSize, top: r.bottom};
+  };
+
+  const tick = () => {
+    if (!dragging) return;
+    const scroll = wrap.closest('.sp-scroll');
+    if (scroll) {
+      const r = scroll.getBoundingClientRect();
+      if (finger.y < r.top + EDGE) scroll.scrollTop -= 8;
+      else if (finger.y > r.bottom - EDGE) scroll.scrollTop += 8;
+    }
+    const at = dropAt(finger.x, finger.y);
+    const pos = getPos();
+    // Dropping right before or after itself would change nothing.
+    target = at && at.pos !== pos && at.pos !== (pos ?? -2) + 1 ? at.pos : null;
+    if (line && at && target !== null) {
+      const r = editor.view.dom.getBoundingClientRect();
+      line.style.display = 'block';
+      line.style.top = `${at.top - 2}px`;
+      line.style.left = `${r.left + 16}px`;
+      line.style.width = `${r.width - 32}px`;
+    } else if (line) line.style.display = 'none';
+    frame = requestAnimationFrame(tick);
+  };
+
+  const end = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    start = null;
+    cancelAnimationFrame(frame);
+    line?.remove();
+    line = null;
+    wrap.classList.remove('dragging');
+    const was = dragging;
+    dragging = false;
+    return was;
+  };
+
+  wrap.addEventListener(
+    'touchstart',
+    e => {
+      touching = true;
+      if (!editor.isEditable || e.touches.length !== 1) return end();
+      if (del.contains(e.target as Node)) return;
+      const t = e.touches[0];
+      start = finger = {x: t.clientX, y: t.clientY};
+      timer = setTimeout(() => {
+        timer = undefined;
+        dragging = true;
+        select();
+        wrap.classList.add('dragging');
+        line = document.createElement('div');
+        line.className = 'sp-drop-line';
+        (wrap.closest('.sp-editor') ?? document.body).appendChild(line);
+        navigator.vibrate?.(10);
+        frame = requestAnimationFrame(tick);
+      }, LONG_PRESS_MS);
+    },
+    {passive: true},
+  );
+  wrap.addEventListener(
+    'touchmove',
+    e => {
+      const t = e.touches[0];
+      if (!t) return;
+      finger = {x: t.clientX, y: t.clientY};
+      if (dragging) e.preventDefault();
+      else if (
+        start &&
+        Math.hypot(finger.x - start.x, finger.y - start.y) > TAP_SLOP
+      )
+        end(); // a scroll, not a press
+    },
+    {passive: false},
+  );
+  wrap.addEventListener('touchend', e => {
+    if (del.contains(e.target as Node)) return;
+    const tapped = timer !== undefined;
+    const to = target;
+    if (end()) {
+      e.preventDefault();
+      const from = getPos();
+      const n = typeof from === 'number' && editor.state.doc.nodeAt(from);
+      if (!n || to === null) return;
+      const tr = editor.state.tr.delete(from!, from! + n.nodeSize);
+      const at = tr.mapping.map(to);
+      tr.insert(at, n);
+      tr.setSelection(NodeSelection.create(tr.doc, at));
+      editor.view.dispatch(tr.scrollIntoView());
+    } else if (tapped && editor.isEditable) {
+      // No click follows, so the keyboard stays down.
+      e.preventDefault();
+      select();
+    }
+  });
+  wrap.addEventListener('touchcancel', () => end());
+  // A finger's long press would otherwise open the image menu or start the
+  // browser's own drag.
+  wrap.addEventListener('contextmenu', e => {
+    if (touching) e.preventDefault();
+  });
+  wrap.addEventListener('dragstart', e => {
+    if (touching) e.preventDefault();
+  });
+  wrap.addEventListener('mousedown', () => (touching = false));
 }
 
 type Btn = {
@@ -261,6 +439,13 @@ const BASE_CSS = `
 .ProseMirror .sp-figure.broken { min-height:60px; border:1px dashed var(--border); border-radius:8px; }
 .ProseMirror .sp-figure.broken::after { content:"Image unavailable"; color:var(--muted); font-size:0.85em; line-height:60px; }
 .ProseMirror .ProseMirror-selectednode img { outline:2px solid var(--primary); }
+.ProseMirror .sp-figure { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+.ProseMirror .sp-figure-frame { position:relative; display:inline-block; max-width:100%; vertical-align:top; }
+.ProseMirror .sp-figure.dragging { opacity:0.45; }
+.sp-figure-del { display:none; position:absolute; top:8px; right:8px; width:34px; height:34px; padding:0; border:0;
+  border-radius:17px; background:rgba(0,0,0,0.65); color:#fff; font:600 16px/34px sans-serif; cursor:pointer; }
+.ProseMirror[contenteditable="true"] .ProseMirror-selectednode .sp-figure-del { display:block; }
+.sp-drop-line { position:fixed; height:4px; border-radius:2px; background:var(--primary); pointer-events:none; z-index:10; }
 .ProseMirror p.is-empty::before, .ProseMirror h1.is-empty::before, .ProseMirror h2.is-empty::before {
   content:attr(data-placeholder); color:var(--muted); opacity:0.6; float:left; height:0; pointer-events:none; }
 @keyframes sp-pulse { 50% { opacity:0.5; } }

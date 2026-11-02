@@ -1,6 +1,5 @@
 import React, {useMemo, useRef, useState} from 'react';
 import {
-  ActivityIndicator,
   Image,
   PanResponder,
   Pressable,
@@ -13,6 +12,7 @@ import Svg, {Path} from 'react-native-svg';
 import {AvatarSource, cropAvatar} from '../files';
 import {useTheme} from '../theme';
 import {Overlay} from './Overlay';
+import {TypingDots} from './TypingDots';
 
 /** How much of the square frame the circle spans. */
 const CIRCLE = 0.84;
@@ -211,7 +211,7 @@ export function AvatarCropper({
           onPress={use}
           disabled={busy || !box}>
           {busy ? (
-            <ActivityIndicator color={theme.primaryText} />
+            <TypingDots color={theme.primaryText} />
           ) : (
             <Text style={[styles.primaryText, {color: theme.primaryText}]}>
               Use photo

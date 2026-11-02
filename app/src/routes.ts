@@ -5,7 +5,8 @@
 export type Route =
   | {name: 'home'}
   | {name: 'doc'; id: string; fresh?: boolean}
-  | {name: 'docSettings'; id: string}
+  // fromHome: opened by holding a page in the grid, so back goes to the grid.
+  | {name: 'docSettings'; id: string; fromHome?: boolean}
   | {name: 'join'; link: string}
   | {name: 'settings'}
   | {name: 'privacy'}

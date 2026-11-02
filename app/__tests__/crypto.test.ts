@@ -91,8 +91,18 @@ test('head and body are bound to their document and epoch', () => {
   // The title is the page's own, not taken from its text.
   const head = makeHead('  Shopping ', md);
   expect(head.title).toBe('Shopping');
-  expect(head.snippet).toBe('Groceries eggs milk Remember the list');
+  expect(head.snippet).toBe('Groceries\neggs\nmilk\nRemember the list');
   expect(makeHead('', '').title).toBe('');
+  // Paragraphs and hard breaks keep their lines, the editor's empty
+  // paragraphs ("&nbsp;") become blank lines, and entities are decoded.
+  expect(
+    makeHead(
+      '',
+      '&nbsp;\n\none  \nline\n\n&nbsp;\n\ntwo &amp;&#160;three\n\n&nbsp;',
+    ).snippet,
+  ).toBe('one\nline\n\ntwo & three');
+  const old = sealHead(key, doc, 3, {title: '', snippet: 'a &nbsp; b'});
+  expect(openHead(key, doc, 3, old).snippet).toBe('a b');
   const h = sealHead(key, doc, 3, head);
   const b = sealBody(key, doc, 3, md);
   expect(openHead(key, doc, 3, h)).toEqual(head);

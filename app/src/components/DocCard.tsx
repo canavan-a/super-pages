@@ -39,10 +39,13 @@ export function DocCard({
   entry,
   me,
   onPress,
+  onLongPress,
 }: {
   entry: DocEntry;
   me: string | undefined;
   onPress: () => void;
+  /** Held down: the page's sharing and settings. */
+  onLongPress?: () => void;
 }): React.JSX.Element {
   const theme = useTheme();
   const styles = makeStyles(theme);
@@ -51,9 +54,22 @@ export function DocCard({
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={400}
       style={({pressed}) => [styles.card, pressed && styles.pressed]}
       accessibilityRole="button"
-      accessibilityLabel={title}>
+      accessibilityLabel={title}
+      accessibilityHint={
+        onLongPress ? 'Long press for sharing and settings' : undefined
+      }
+      accessibilityActions={
+        onLongPress
+          ? [{name: 'longpress', label: 'Sharing and settings'}]
+          : undefined
+      }
+      onAccessibilityAction={e =>
+        e.nativeEvent.actionName === 'longpress' && onLongPress?.()
+      }>
       <View style={styles.top}>
         <Text
           style={[styles.title, !head?.title && styles.muted]}

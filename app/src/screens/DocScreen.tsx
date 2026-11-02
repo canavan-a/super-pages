@@ -1,15 +1,9 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {
-  ActivityIndicator,
-  AppState,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import {AppState, Pressable, StyleSheet, Text, View} from 'react-native';
 
 import type {HeaderInfo, HeaderViewer} from '../App';
 import {Notice} from '../components/Notice';
+import {TypingDots} from '../components/TypingDots';
 import {b64, newId, unb64} from '../crypto';
 import {DocEditor} from '../editor/DocEditor';
 import type {DocEditorRef} from '../editor/types';
@@ -391,7 +385,7 @@ export function DocScreen({
   if (!opened) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={theme.textMuted} />
+        <TypingDots color={theme.textMuted} />
       </View>
     );
   }
@@ -437,7 +431,7 @@ export function DocScreen({
       )}
       {uploading && (
         <View style={styles.infoBar}>
-          <ActivityIndicator size="small" color={theme.textMuted} />
+          <TypingDots color={theme.textMuted} size={5} />
           <Text style={styles.infoText}>{uploading}</Text>
         </View>
       )}

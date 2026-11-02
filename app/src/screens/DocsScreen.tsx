@@ -1,6 +1,5 @@
 import React, {useCallback, useMemo, useState} from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
@@ -12,6 +11,7 @@ import {
 
 import {DocCard} from '../components/DocCard';
 import {Icon} from '../components/Icon';
+import {TypingDots} from '../components/TypingDots';
 import {createDoc, refreshDocs, useStore} from '../pagesStore';
 import type {Route} from '../routes';
 import {session} from '../session';
@@ -54,7 +54,7 @@ export function DocsScreen({
   if (!loaded) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={theme.textMuted} />
+        <TypingDots color={theme.textMuted} />
       </View>
     );
   }
@@ -104,6 +104,16 @@ export function DocsScreen({
               entry={item}
               me={me}
               onPress={() => onNavigate({name: 'doc', id: item.summary.id})}
+              onLongPress={
+                item.locked
+                  ? undefined
+                  : () =>
+                      onNavigate({
+                        name: 'docSettings',
+                        id: item.summary.id,
+                        fromHome: true,
+                      })
+              }
             />
           </View>
         )}
@@ -115,7 +125,7 @@ export function DocsScreen({
         accessibilityLabel="New page"
         disabled={creating}>
         {creating ? (
-          <ActivityIndicator color={theme.primaryText} />
+          <TypingDots color={theme.primaryText} />
         ) : (
           <Icon name="plus" size={26} color={theme.primaryText} />
         )}

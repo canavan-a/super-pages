@@ -1,6 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
-  ActivityIndicator,
   AppState,
   Pressable,
   ScrollView,
@@ -10,6 +9,7 @@ import {
 } from 'react-native';
 
 import {Icon} from '../components/Icon';
+import {TypingDots} from '../components/TypingDots';
 import {loadIdentity, Stored} from '../keystore';
 import {splashHold} from '../logo/splashHold';
 import {LogoArt} from '../logo/LogoArt';
@@ -155,10 +155,7 @@ export function LockScreen({
       </View>
       <View style={[styles.center, local.lockArea]}>
         {opening ? (
-          <ActivityIndicator
-            color={theme.textMuted}
-            accessibilityLabel="Opening"
-          />
+          <TypingDots color={theme.textMuted} accessibilityLabel="Opening" />
         ) : (
           <>
             <Icon name="lock" size={28} color={theme.textMuted} />

@@ -1,14 +1,9 @@
 import React, {useEffect, useMemo, useState} from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import {Pressable, StyleSheet, Text, View} from 'react-native';
 
 import {Notice} from '../components/Notice';
 import {roleLabel} from '../components/RolePicker';
+import {TypingDots} from '../components/TypingDots';
 import {parseShareLink} from '../crypto';
 import {joinLink, LinkPreview, previewLink} from '../pagesStore';
 import type {Route} from '../routes';
@@ -70,7 +65,7 @@ export function JoinScreen({
             {error}
           </Notice>
         ) : !preview ? (
-          <ActivityIndicator color={theme.textMuted} />
+          <TypingDots color={theme.textMuted} />
         ) : (
           <>
             <Text style={styles.kicker}>You've been invited to</Text>
@@ -84,7 +79,7 @@ export function JoinScreen({
               disabled={busy}
               onPress={join}>
               {busy ? (
-                <ActivityIndicator color={theme.primaryText} />
+                <TypingDots color={theme.primaryText} />
               ) : (
                 <Text style={styles.primaryText}>Open page</Text>
               )}

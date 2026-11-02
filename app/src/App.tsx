@@ -1,6 +1,5 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
-  ActivityIndicator,
   AppState,
   AppStateStatus,
   BackHandler,
@@ -28,6 +27,7 @@ import {CrashScreen} from './components/CrashScreen';
 import {Icon, IconName} from './components/Icon';
 import {PixelField} from './components/PixelField';
 import {PortalOutlet, PortalProvider} from './components/Portal';
+import {TypingDots} from './components/TypingDots';
 import {parseShareLink} from './crypto';
 import {hasStoredIdentity, HAS_LOCK, loadIdentity, Stored} from './keystore';
 import {LogoLine} from './logo/LogoArt';
@@ -183,7 +183,7 @@ function AccountGate(): React.JSX.Element {
   if (gate === 'loading') {
     return (
       <View style={[styles.fill, {backgroundColor: theme.bg}]}>
-        <ActivityIndicator color={theme.textMuted} />
+        <TypingDots color={theme.textMuted} />
       </View>
     );
   }
@@ -259,7 +259,8 @@ function AppInner({
   }, [pendingLink, navigate, onLinkHandled]);
 
   const goBack = useCallback(() => {
-    if (route.name === 'docSettings') navigate({name: 'doc', id: route.id});
+    if (route.name === 'docSettings' && !route.fromHome)
+      navigate({name: 'doc', id: route.id});
     else if (route.name === 'privacy' || route.name === 'terms')
       navigate({name: 'settings'});
     else {
