@@ -4,32 +4,8 @@ import {Pressable, StyleSheet, Text, View} from 'react-native';
 import type {DocEntry} from '../pagesStore';
 import {Theme, useTheme} from '../theme';
 import {AvatarStack} from './AvatarStack';
+import {rowTime} from './DocRow';
 import {Icon} from './Icon';
-
-/** "3m", "2h", "Yesterday", "12 Mar". */
-export function shortTime(ms: number, now = Date.now()): string {
-  const s = Math.max(0, (now - ms) / 1000);
-  if (s < 60) return 'now';
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  if (s < 2 * 86400) return 'Yesterday';
-  const d = new Date(ms);
-  const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-  return `${d.getDate()} ${months[d.getMonth()]}`;
-}
 
 /**
  * A page in the grid: a square with its title, the start of its text, and
@@ -93,7 +69,7 @@ export function DocCard({
         </Text>
       )}
       <View style={styles.footer}>
-        <Text style={styles.time}>{shortTime(summary.updated_at)}</Text>
+        <Text style={styles.time}>{rowTime(summary.updated_at)}</Text>
         <AvatarStack
           members={summary.members}
           exclude={me}
@@ -143,6 +119,11 @@ function makeStyles(theme: Theme) {
       marginTop: 6,
       minHeight: 24,
     },
-    time: {fontSize: 11, color: theme.textMuted, fontWeight: '600'},
+    time: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: theme.text,
+      fontVariant: ['tabular-nums'],
+    },
   });
 }

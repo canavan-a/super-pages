@@ -19,6 +19,7 @@ import {
   uploadImage,
 } from '../pagesStore';
 import type {Route} from '../routes';
+import {platformConfirm} from '../platformConfirm';
 import {session} from '../session';
 import {Theme, useTheme} from '../theme';
 import {roleLabel} from '../components/RolePicker';
@@ -26,6 +27,8 @@ import {roleLabel} from '../components/RolePicker';
 /** How long typing has to pause before the page is saved. */
 const SAVE_DELAY_MS = 1200;
 const MAX_IMAGE_BYTES = 15 << 20;
+/** How long leaving the page waits on its last save before asking. */
+const LEAVE_SAVE_TIMEOUT_MS = 8000;
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error' | 'conflict';
 
@@ -40,11 +43,14 @@ export function DocScreen({
   fresh,
   onNavigate,
   onHeaderChange,
+  setLeaveGuard,
 }: {
   id: string;
   fresh?: boolean;
   onNavigate: (r: Route) => void;
   onHeaderChange: (h: HeaderInfo | null) => void;
+  /** Hands the app a check it runs (and waits on) before leaving this page. */
+  setLeaveGuard?: (g: (() => Promise<boolean>) | null) => void;
 }): React.JSX.Element {
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -113,6 +119,8 @@ export function DocScreen({
       }
       if (inFlight.current) await inFlight.current;
       if (!opened || (!force && edits.current === savedEdits.current)) return;
+      // The editor is gone (the page was closed): nothing left to read.
+      if (!editor.current) return;
       setSaveState('saving');
       inFlight.current = (async () => {
         try {
@@ -234,6 +242,55 @@ export function DocScreen({
     [],
   );
 
+  // Leaving the page: save while the editor is still here to read from (by
+  // the time this screen unmounts it's gone), and if that doesn't work, ask
+  // before dropping what wasn't saved.
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => {
+    if (!setLeaveGuard) return;
+    setLeaveGuard(async () => {
+      await Promise.race([
+        flushRef.current().catch(() => {}),
+        new Promise(r => setTimeout(r, LEAVE_SAVE_TIMEOUT_MS)),
+      ]);
+      if (edits.current === savedEdits.current) return true;
+      return new Promise<boolean>(resolve =>
+        platformConfirm(
+          'Not saved',
+          "Your latest changes haven't been saved yet. Leave anyway and lose them?",
+          'Leave',
+          () => resolve(true),
+          true,
+          () => resolve(false),
+        ),
+      );
+    });
+    return () => setLeaveGuard(null);
+  }, [setLeaveGuard]);
+
+  // Ctrl+S / ⌘S in a browser: save now instead of the browser's "Save page as".
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      typeof window.addEventListener !== 'function'
+    )
+      return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === 's'
+      ) {
+        e.preventDefault();
+        flushRef.current().catch(() => {});
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Save before leaving the page or the app.
   useEffect(() => {
     const sub = AppState.addEventListener(
@@ -351,8 +408,7 @@ export function DocScreen({
         {
           label: 'Sharing and settings',
           icon: 'members' as const,
-          onPress: () =>
-            flush().then(() => onNavigate({name: 'docSettings', id})),
+          onPress: () => onNavigate({name: 'docSettings', id}),
         },
       ],
     });
@@ -364,7 +420,6 @@ export function DocScreen({
     here,
     canWrite,
     pickImage,
-    flush,
     onNavigate,
     id,
     onHeaderChange,

@@ -9,6 +9,7 @@ import {
   File,
   Image as ImageIcon,
   Info,
+  LayoutGrid,
   Link,
   Lock,
   LucideIcon,
@@ -18,6 +19,7 @@ import {
   Plus,
   Paperclip,
   RefreshCw,
+  Rows3,
   Pencil,
   Eye,
   Bold,
@@ -78,7 +80,9 @@ export type IconName =
   | 'plus'
   | 'info'
   | 'warning'
-  | 'retry';
+  | 'retry'
+  | 'grid'
+  | 'rows';
 
 const ICONS: Record<IconName, LucideIcon> = {
   kebab: MoreVertical,
@@ -117,6 +121,8 @@ const ICONS: Record<IconName, LucideIcon> = {
   info: Info,
   warning: TriangleAlert,
   retry: RefreshCw,
+  grid: LayoutGrid,
+  rows: Rows3,
 };
 
 export function Icon({

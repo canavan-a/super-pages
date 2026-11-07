@@ -114,6 +114,33 @@ function entry(s: Session, d: DocSummary): DocEntry {
   }
 }
 
+/**
+ * The listed docs, except where this device already has a newer copy: a save
+ * that finished while the list was on its way shouldn't be rolled back to
+ * the preview from before it.
+ */
+function fresher(s: Session, docs: DocSummary[]): DocEntry[] {
+  const have = new Map(state.docs.map(e => [e.summary.id, e]));
+  return docs
+    .map(d => {
+      const e = have.get(d.id);
+      if (
+        e?.head &&
+        (e.summary.epoch > d.epoch ||
+          (e.summary.epoch === d.epoch && e.summary.version > d.version))
+      ) {
+        const {version, epoch, head_ct, updated_at, updated_by, key} =
+          e.summary;
+        return {
+          ...e,
+          summary: {...d, version, epoch, head_ct, updated_at, updated_by, key},
+        };
+      }
+      return entry(s, d);
+    })
+    .sort((a, b) => b.summary.updated_at - a.summary.updated_at);
+}
+
 let refreshing: Promise<void> | null = null;
 
 /** Reloads the list, then quietly does any sharing work waiting on this device. */
@@ -123,7 +150,7 @@ export function refreshDocs(): Promise<void> {
     const s = session.require();
     try {
       const docs = await api.docs(s.server, s.account);
-      set({docs: docs.map(d => entry(s, d)), loaded: true, error: null});
+      set({docs: fresher(s, docs), loaded: true, error: null});
     } catch (e) {
       set({loaded: true, error: (e as Error).message});
       return;
@@ -543,7 +570,7 @@ export async function processTodo(): Promise<void> {
   }
   if (changed) {
     const docs = await api.docs(s.server, s.account);
-    set({docs: docs.map(d => entry(s, d))});
+    set({docs: fresher(s, docs)});
   }
 }
 

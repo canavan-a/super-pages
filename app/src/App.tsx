@@ -45,7 +45,7 @@ import {LockScreen} from './screens/LockScreen';
 import {OnboardingScreen} from './screens/OnboardingScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
 import {session} from './session';
-import {settingsStore} from './settings';
+import {setDocsView, settingsStore, useSetting} from './settings';
 import {Theme, ThemeProvider, useTheme} from './theme';
 
 const TITLES: Record<Route['name'], string> = {
@@ -236,9 +236,28 @@ function AppInner({
   const [route, setRoute] = useState<Route>({name: 'home'});
   const [headerInfo, setHeaderInfo] = useState<HeaderInfo | null>(null);
   const [me, setMe] = useState(session.get()?.me ?? null);
+  const docsView = useSetting('docsView');
   useEffect(() => session.subscribe(s => setMe(s?.me ?? null)), []);
 
-  const navigate = useCallback((next: Route) => {
+  // The open page's last word before it's left: it saves what's typed and
+  // says whether leaving is fine (false keeps it open).
+  const leaveGuard = useRef<(() => Promise<boolean>) | null>(null);
+  const leaving = useRef(false);
+  const setLeaveGuard = useCallback((g: (() => Promise<boolean>) | null) => {
+    leaveGuard.current = g;
+  }, []);
+
+  const navigate = useCallback(async (next: Route): Promise<boolean> => {
+    const guard = leaveGuard.current;
+    if (guard) {
+      if (leaving.current) return false;
+      leaving.current = true;
+      try {
+        if (!(await guard())) return false;
+      } finally {
+        leaving.current = false;
+      }
+    }
     setHeaderInfo(null);
     setRoute(next);
     if (
@@ -249,6 +268,7 @@ function AppInner({
       // Drop /s/<link> from the address bar once it's been handled.
       history.replaceState(null, '', '/');
     }
+    return true;
   }, []);
 
   useEffect(() => {
@@ -264,8 +284,10 @@ function AppInner({
     else if (route.name === 'privacy' || route.name === 'terms')
       navigate({name: 'settings'});
     else {
-      navigate({name: 'home'});
-      refreshDocs().catch(() => {});
+      // Once the page is saved, so the grid shows what was just typed.
+      navigate({name: 'home'}).then(left => {
+        if (left) refreshDocs().catch(() => {});
+      });
     }
   }, [route, navigate]);
 
@@ -376,6 +398,20 @@ function AppInner({
         {route.name === 'home' && (
           <Pressable
             style={styles.headerIconButton}
+            onPress={() => setDocsView(docsView === 'list' ? 'grid' : 'list')}
+            accessibilityLabel={
+              docsView === 'list' ? 'Show as cards' : 'Show as list'
+            }>
+            <Icon
+              name={docsView === 'list' ? 'grid' : 'rows'}
+              size={20}
+              color={theme.text}
+            />
+          </Pressable>
+        )}
+        {route.name === 'home' && (
+          <Pressable
+            style={styles.headerIconButton}
             onPress={() => navigate({name: 'settings'})}
             accessibilityLabel="Settings">
             <Icon name="gear" size={20} color={theme.text} />
@@ -392,6 +428,7 @@ function AppInner({
             fresh={route.fresh}
             onNavigate={navigate}
             onHeaderChange={setHeaderInfo}
+            setLeaveGuard={setLeaveGuard}
           />
         )}
         {route.name === 'docSettings' && (

@@ -10,19 +10,27 @@ export function platformConfirm(
   confirmLabel: string,
   onConfirm: () => void,
   destructive = true,
+  onCancel?: () => void,
 ): void {
   if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
     if (window.confirm(message)) {
       onConfirm();
+    } else {
+      onCancel?.();
     }
     return;
   }
-  Alert.alert(title, message, [
-    {text: 'Cancel', style: 'cancel'},
-    {
-      text: confirmLabel,
-      style: destructive ? 'destructive' : 'default',
-      onPress: onConfirm,
-    },
-  ]);
+  Alert.alert(
+    title,
+    message,
+    [
+      {text: 'Cancel', style: 'cancel', onPress: onCancel},
+      {
+        text: confirmLabel,
+        style: destructive ? 'destructive' : 'default',
+        onPress: onConfirm,
+      },
+    ],
+    {cancelable: true, onDismiss: onCancel},
+  );
 }

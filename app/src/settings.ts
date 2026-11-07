@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {useSyncExternalStore} from 'react';
 import {Platform} from 'react-native';
 
 // Everyone's default server. Anyone can run their own and pick it when
@@ -25,6 +26,8 @@ export interface Settings {
   // MAX_SPLASH_STRIKES in a row the splash turns itself off.
   splashStrikes: number;
   splashAutoDisabled: boolean;
+  // How home lays out the pages: squares, or a flat list grouped by date.
+  docsView: 'grid' | 'list';
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -35,6 +38,7 @@ const DEFAULT_SETTINGS: Settings = {
   launchSplash: true,
   splashStrikes: 0,
   splashAutoDisabled: false,
+  docsView: 'grid',
 };
 
 type Listener = (settings: Settings) => void;
@@ -54,6 +58,7 @@ async function load(): Promise<Settings> {
     // fall back to defaults — a corrupt/missing value shouldn't crash startup
   }
   loaded = true;
+  listeners.forEach(l => l(current));
   return current;
 }
 
@@ -104,4 +109,13 @@ export function homeServer(): string {
     return location.origin;
   }
   return DEFAULT_SERVER;
+}
+
+/** One setting, kept current as it changes. */
+export function useSetting<K extends keyof Settings>(key: K): Settings[K] {
+  return useSyncExternalStore(settingsStore.subscribe, () => current[key]);
+}
+
+export function setDocsView(v: Settings['docsView']): void {
+  settingsStore.update({docsView: v});
 }
