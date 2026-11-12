@@ -624,3 +624,106 @@ func TestNoEmailLeaks(t *testing.T) {
 		t.Fatalf("/me: %v", out)
 	}
 }
+
+// A page shared by email waits unaccepted until the person accepts it;
+// declining is leaving. Pages made or joined by link are accepted already.
+func TestAcceptShare(t *testing.T) {
+	e := newEnv(t)
+	owner := e.signup("owner@example.com", "Owner", "")
+	friend := e.signup("friend@example.com", "Friend", "")
+	doc := e.createDoc(owner)
+	other := e.createDoc(owner)
+	e.share(owner, doc, friend, "edit")
+	e.share(owner, other, friend, "view")
+
+	accepted := func(u *user) map[string]any {
+		_, out, _ := e.do("GET", "/v1/docs", nil, u.priv, nil)
+		m := map[string]any{}
+		for _, d := range out["docs"].([]any) {
+			dv := d.(map[string]any)
+			m[dv["id"].(string)] = dv["accepted"]
+			if dv["added_by"] == "" || dv["added_at"] == float64(0) {
+				t.Fatalf("missing added_by/added_at: %v", dv)
+			}
+		}
+		return m
+	}
+	if a := accepted(owner); a[doc] != true || a[other] != true {
+		t.Fatalf("owner's own pages not accepted: %v", a)
+	}
+	if a := accepted(friend); a[doc] != false || a[other] != false {
+		t.Fatalf("shared pages accepted already: %v", a)
+	}
+	if st, _, _ := e.do("POST", "/v1/docs/"+doc+"/accept", nil, friend.priv, nil); st != 204 {
+		t.Fatalf("accept: %d", st)
+	}
+	if st, _, _ := e.do("POST", "/v1/docs/"+other+"/leave", nil, friend.priv, nil); st != 204 {
+		t.Fatalf("decline: %d", st)
+	}
+	a := accepted(friend)
+	if a[doc] != true {
+		t.Fatalf("not accepted: %v", a)
+	}
+	if _, ok := a[other]; ok || len(a) != 1 {
+		t.Fatalf("declined page still listed: %v", a)
+	}
+	_, out, _ := e.do("GET", "/v1/docs/"+doc, nil, friend.priv, nil)
+	if out["accepted"] != true {
+		t.Fatalf("getDoc accepted: %v", out)
+	}
+	// Someone not in the page can't accept it.
+	stranger := e.signup("stranger@example.com", "Stranger", "")
+	if st, _, _ := e.do("POST", "/v1/docs/"+doc+"/accept", nil, stranger.priv, nil); st != 404 {
+		t.Fatalf("stranger accept: %d", st)
+	}
+}
+
+// A page whose sealed key is garbage ("invalid tag" on the device) can still
+// be declined, left or deleted: none of those need the key. And the pages
+// you make yourself are always in your pages, never waiting for acceptance.
+func TestBadKeyPagesCanBeRemoved(t *testing.T) {
+	e := newEnv(t)
+	owner := e.signup("owner@example.com", "Owner", "")
+	victim := e.signup("victim@example.com", "Victim", "")
+
+	// Shared with a garbage key, never accepted: decline (leave) works.
+	bad := e.createDoc(owner)
+	if st, _, _ := e.do("POST", "/v1/docs/"+bad+"/share", map[string]string{"email": victim.Email, "role": "edit"}, owner.priv, nil); st != 200 {
+		t.Fatalf("share: %d", st)
+	}
+	if st, out, _ := e.do("POST", "/v1/docs/"+bad+"/members", map[string]any{"user_id": victim.ID, "role": "edit", "epoch": 1, "wrapped_key": "garbage"}, owner.priv, nil); st != 204 {
+		t.Fatalf("add: %d %v", st, out)
+	}
+	if st, _, _ := e.do("POST", "/v1/docs/"+bad+"/leave", nil, victim.priv, nil); st != 204 {
+		t.Fatalf("decline bad-key page: %d", st)
+	}
+	if st, _, _ := e.do("GET", "/v1/docs/"+bad, nil, victim.priv, nil); st != 404 {
+		t.Fatalf("still a member after declining: %d", st)
+	}
+
+	// Accepted, then the key goes bad: leaving still works.
+	bad2 := e.createDoc(owner)
+	e.share(owner, bad2, victim, "view")
+	e.do("POST", "/v1/docs/"+bad2+"/accept", nil, victim.priv, nil)
+	if st, _, _ := e.do("POST", "/v1/docs/"+bad2+"/leave", nil, victim.priv, nil); st != 204 {
+		t.Fatalf("leave accepted bad-key page: %d", st)
+	}
+
+	// Made an owner of a bad-key page: delete works without the key.
+	bad3 := e.createDoc(owner)
+	e.share(owner, bad3, victim, "owner")
+	if st, _, _ := e.do("DELETE", "/v1/docs/"+bad3, nil, victim.priv, nil); st != 204 {
+		t.Fatalf("owner delete bad-key page: %d", st)
+	}
+
+	// The victim's own page is accepted from the start and fully theirs.
+	mine := e.createDoc(victim)
+	_, out, _ := e.do("GET", "/v1/docs", nil, victim.priv, nil)
+	docs := out["docs"].([]any)
+	if len(docs) != 1 || docs[0].(map[string]any)["id"] != mine || docs[0].(map[string]any)["accepted"] != true {
+		t.Fatalf("own pages: %v", docs)
+	}
+	if st, _, _ := e.do("PUT", "/v1/docs/"+mine, e.save(victim, mine, 1, 1, "h2", "b2", ""), victim.priv, nil); st != 200 {
+		t.Fatalf("save own page: %d", st)
+	}
+}

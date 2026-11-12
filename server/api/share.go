@@ -90,6 +90,7 @@ func (a *API) shareByEmail(c *gin.Context) {
 
 // addMember adds someone with the document key sealed to them: a match from
 // shareByEmail, or a pending share whose address has since signed up.
+// The page waits in their "Shared with me" list until they accept it.
 func (a *API) addMember(c *gin.Context) {
 	d, role, ok := a.access(c, c.Param("id"))
 	if !ok || !need(c, role == database.RoleOwner, "only owners can share a document") {
@@ -484,7 +485,11 @@ func (a *API) joinLink(c *gin.Context) {
 		err := tx.Where("doc_id = ? AND user_id = ?", l.DocID, u.ID).Take(&m).Error
 		if err == nil {
 			// Already in: a link never lowers or raises a role, but it can
-			// hand back a key the member was missing.
+			// hand back a key the member was missing. Opening a link to a
+			// page waiting in "Shared with me" accepts it.
+			if err := tx.Model(&database.DocMember{}).Where("doc_id = ? AND user_id = ?", l.DocID, u.ID).Update("accepted", true).Error; err != nil {
+				return err
+			}
 			return tx.Save(&database.DocKey{DocID: l.DocID, UserID: u.ID, Epoch: l.Epoch, WrappedKey: req.WrappedKey}).Error
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -498,7 +503,7 @@ func (a *API) joinLink(c *gin.Context) {
 		if res.RowsAffected != 1 {
 			return gorm.ErrRecordNotFound
 		}
-		if err := tx.Create(&database.DocMember{DocID: l.DocID, UserID: u.ID, Role: l.Role, AddedBy: l.CreatedBy, AddedAt: now.UnixMilli()}).Error; err != nil {
+		if err := tx.Create(&database.DocMember{DocID: l.DocID, UserID: u.ID, Role: l.Role, AddedBy: l.CreatedBy, AddedAt: now.UnixMilli(), Accepted: true}).Error; err != nil {
 			return err
 		}
 		return tx.Create(&database.DocKey{DocID: l.DocID, UserID: u.ID, Epoch: l.Epoch, WrappedKey: req.WrappedKey}).Error

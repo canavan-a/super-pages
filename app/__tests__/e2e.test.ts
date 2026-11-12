@@ -7,14 +7,16 @@ import {mkdtempSync, readFileSync, rmSync} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
 
-import {api} from '../src/api';
+import {api, ApiError} from '../src/api';
 import {
   accountFromEntropy,
   b64,
   lockBundle,
   newAccount,
   openBundle,
+  newDocKey,
   parseShareLink,
+  wrapDocKey,
 } from '../src/crypto';
 import * as store from '../src/pagesStore';
 import {session} from '../src/session';
@@ -233,5 +235,70 @@ run('end to end', () => {
     expect(db).not.toContain('launch code');
     expect(db).not.toContain('Plans');
     expect(version).toBeGreaterThan(1);
+
+    // A page shared with Carol under a key she can't open (sealed to the
+    // wrong person: "invalid tag" on her device). It waits in Shared with
+    // me, shows as unreadable, and she can still decline it.
+    as(alice);
+    const badId = await store.createDoc('junk', 'Junk');
+    const badOpen = await store.openDoc(badId);
+    const found = await api.share(
+      SERVER,
+      alice.account,
+      badId,
+      'carol@example.com',
+      'edit',
+    );
+    await api.addMember(SERVER, alice.account, badId, {
+      user_id: found.user!.id,
+      role: 'edit',
+      epoch: badOpen.doc.epoch,
+      wrapped_key: wrapDocKey(newDocKey(), b64(alice.account.xPub), badId),
+    });
+    // Alice's own pages are accepted from the start.
+    await store.refreshDocs();
+    expect(store.getState().docs.every(e => e.summary.accepted === true)).toBe(
+      true,
+    );
+
+    as(carol);
+    const carolsOwn = await store.createDoc('mine', 'Mine');
+    await store.refreshDocs();
+    const badEntry = store.getState().docs.find(e => e.summary.id === badId)!;
+    expect(badEntry.summary.accepted).toBe(false);
+    expect(badEntry.unreadable).toBeTruthy();
+    await expect(store.openDoc(badId)).rejects.not.toBeInstanceOf(ApiError);
+    // What the settings screen falls back to: details without the key.
+    expect((await store.fetchDocInfo(badId)).role).toBe('edit');
+    await store.declineDoc(badId);
+    await store.refreshDocs();
+    let ids = store.getState().docs.map(e => e.summary.id);
+    expect(ids).not.toContain(badId);
+    expect(ids).toContain(carolsOwn);
+    expect(
+      store.getState().docs.find(e => e.summary.id === carolsOwn)!.summary
+        .accepted,
+    ).toBe(true);
+    expect((await store.openDoc(carolsOwn)).markdown).toContain('mine');
+
+    // Same once accepted: leaving still works without the key.
+    as(alice);
+    const bad2 = await store.createDoc('junk', 'Junk 2');
+    const bad2Open = await store.openDoc(bad2);
+    await api.share(SERVER, alice.account, bad2, 'carol@example.com', 'view');
+    await api.addMember(SERVER, alice.account, bad2, {
+      user_id: found.user!.id,
+      role: 'view',
+      epoch: bad2Open.doc.epoch,
+      wrapped_key: wrapDocKey(newDocKey(), b64(alice.account.xPub), bad2),
+    });
+    as(carol);
+    await store.refreshDocs();
+    await store.acceptDoc(bad2);
+    await store.leaveDoc(bad2);
+    await store.refreshDocs();
+    ids = store.getState().docs.map(e => e.summary.id);
+    expect(ids).not.toContain(bad2);
+    expect(ids).toContain(carolsOwn);
   });
 });

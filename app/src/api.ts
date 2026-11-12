@@ -192,6 +192,11 @@ export interface DocSummary {
   /** My sealed copy of the current key; null while waiting for an owner's app. */
   key: string | null;
   needs_rekey: boolean;
+  /** False while the page waits in "Shared with me" for me to accept it. */
+  accepted: boolean;
+  /** Who shared it with me (my own id for pages I made), and when (ms). */
+  added_by: string;
+  added_at: number;
   members: Member[];
 }
 
@@ -371,6 +376,8 @@ export const api = {
 
   leaveDoc: (server: string, by: Signer, id: string) =>
     request<void>(server, 'POST', `/v1/docs/${id}/leave`, by),
+  acceptDoc: (server: string, by: Signer, id: string) =>
+    request<void>(server, 'POST', `/v1/docs/${id}/accept`, by),
 
   share: (server: string, by: Signer, id: string, email: string, role: Role) =>
     request<{

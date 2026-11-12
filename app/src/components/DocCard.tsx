@@ -25,8 +25,14 @@ export function DocCard({
 }): React.JSX.Element {
   const theme = useTheme();
   const styles = makeStyles(theme);
-  const {summary, head, locked} = entry;
-  const title = head?.title || (locked ? 'Waiting for access' : 'Untitled');
+  const {summary, head, locked, unreadable} = entry;
+  const title =
+    head?.title ||
+    (unreadable
+      ? "Can't be opened"
+      : locked
+      ? 'Waiting for access'
+      : 'Untitled');
   return (
     <Pressable
       onPress={onPress}
@@ -60,7 +66,9 @@ export function DocCard({
         <View style={styles.lockedBox}>
           <Icon name="lock" size={18} color={theme.textMuted} />
           <Text style={styles.lockedText}>
-            An owner's app will send you the key next time it opens.
+            {unreadable
+              ? `${unreadable}. Hold to leave it.`
+              : "An owner's app will send you the key next time it opens."}
           </Text>
         </View>
       ) : (

@@ -434,6 +434,12 @@ export function DocScreen({
         <Pressable style={styles.button} onPress={load}>
           <Text style={styles.buttonText}>Try again</Text>
         </Pressable>
+        {/* Where a page that won't open can still be left. */}
+        <Pressable
+          style={styles.button}
+          onPress={() => onNavigate({name: 'docSettings', id})}>
+          <Text style={styles.buttonText}>Sharing and settings</Text>
+        </Pressable>
       </View>
     );
   }

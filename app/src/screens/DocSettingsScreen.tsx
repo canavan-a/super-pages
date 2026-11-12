@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 
+import {ApiError} from '../api';
 import type {DocFull, Member, Role, ShareLinkInfo} from '../api';
 import {copyText} from '../clipboard';
 import {Avatar} from '../components/Avatar';
@@ -19,9 +20,12 @@ import {TypingDots} from '../components/TypingDots';
 import {
   cancelPending,
   createLink,
+  acceptDoc,
   deleteDoc,
+  fetchDocInfo,
   leaveDoc,
   listLinks,
+  LockedError,
   openDoc,
   removeMember,
   revokeLink,
@@ -71,14 +75,35 @@ export function DocSettingsScreen({
   const [linkUses, setLinkUses] = useState(1);
   const [freshLink, setFreshLink] = useState<string | null>(null);
 
+  // Set when the page's content can't be opened here (no key yet, or a key
+  // that doesn't decrypt it, e.g. "invalid tag"). Its members and the way
+  // out (leave, decline, delete) still show; anything needing the key won't.
+  const [unreadable, setUnreadable] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     try {
       const o = await openDoc(id);
       setDoc(o.doc);
       setTitle(o.title);
+      setUnreadable(null);
       if (o.doc.role === 'owner') setLinks(await listLinks(id));
     } catch (e) {
-      setError((e as Error).message);
+      if (e instanceof ApiError) {
+        setError(e.message);
+        return;
+      }
+      try {
+        setDoc(await fetchDocInfo(id));
+        setUnreadable(
+          e instanceof LockedError
+            ? e.message
+            : `This page can't be decrypted on this account (${
+                (e as Error).message
+              }). You can still leave it.`,
+        );
+      } catch (e2) {
+        setError((e2 as Error).message);
+      }
     }
   }, [id]);
 
@@ -114,7 +139,9 @@ export function DocSettingsScreen({
     );
   }
 
-  const owner = doc.role === 'owner';
+  // Sharing needs the page key, so it's hidden while the page can't be read.
+  const owner = doc.role === 'owner' && !unreadable;
+  const isOwner = doc.role === 'owner';
   const owners = doc.members.filter(m => m.role === 'owner').length;
 
   const share = () =>
@@ -182,6 +209,27 @@ export function DocSettingsScreen({
       </Text>
       <Text style={styles.muted}>Your role: {roleLabel(doc.role)}</Text>
 
+      {unreadable && (
+        <Notice kind="error" title="Can't open this page">
+          {unreadable}
+        </Notice>
+      )}
+      {doc.accepted === false && (
+        <View style={styles.section}>
+          <Text style={styles.hint}>
+            This page was shared with you and is waiting in Shared with me.
+          </Text>
+          {!unreadable && (
+            <Pressable
+              style={[styles.primary, !!busy && styles.disabled]}
+              disabled={!!busy}
+              onPress={() => run('Accepting…', () => acceptDoc(id))}>
+              <Icon name="check" size={16} color={theme.primaryText} />
+              <Text style={styles.primaryText}>Accept</Text>
+            </Pressable>
+          )}
+        </View>
+      )}
       {error && (
         <Notice kind="error" title="That didn't work">
           {error}
@@ -382,15 +430,19 @@ export function DocSettingsScreen({
       )}
 
       <View style={styles.section}>
-        {(!owner || owners > 1 || doc.members.length === 1) && (
+        {(!isOwner || owners > 1 || doc.members.length === 1) && (
           <Pressable style={styles.secondary} onPress={leave}>
             <Icon name="logout" size={16} color={theme.text} />
             <Text style={styles.secondaryText}>
-              {doc.members.length === 1 ? 'Leave (deletes it)' : 'Leave page'}
+              {doc.members.length === 1
+                ? 'Leave (deletes it)'
+                : doc.accepted !== false
+                ? 'Leave page'
+                : 'Decline page'}
             </Text>
           </Pressable>
         )}
-        {owner && (
+        {isOwner && (
           <Pressable style={[styles.secondary, styles.danger]} onPress={del}>
             <Icon name="trash" size={16} color={theme.danger} />
             <Text style={[styles.secondaryText, {color: theme.danger}]}>
@@ -398,7 +450,7 @@ export function DocSettingsScreen({
             </Text>
           </Pressable>
         )}
-        {owner && owners === 1 && doc.members.length > 1 && (
+        {isOwner && owners === 1 && doc.members.length > 1 && (
           <Text style={styles.hint}>
             You're the only owner. Make someone else an owner before you leave.
           </Text>

@@ -29,20 +29,25 @@ type memberView struct {
 }
 
 type docView struct {
-	ID         string        `json:"id"`
-	Version    int64         `json:"version"`
-	Epoch      int64         `json:"epoch"`
-	HeadCt     string        `json:"head_ct"`
-	BodyCt     string        `json:"body_ct,omitempty"`
-	Sig        string        `json:"sig,omitempty"`
-	UpdatedBy  string        `json:"updated_by"`
-	UpdatedAt  int64         `json:"updated_at"`
-	CreatedAt  int64         `json:"created_at"`
-	Role       string        `json:"role"`
-	Key        *string       `json:"key"`
-	NeedsRekey bool          `json:"needs_rekey"`
-	Members    []memberView  `json:"members"`
-	Pending    []pendingView `json:"pending,omitempty"`
+	ID         string  `json:"id"`
+	Version    int64   `json:"version"`
+	Epoch      int64   `json:"epoch"`
+	HeadCt     string  `json:"head_ct"`
+	BodyCt     string  `json:"body_ct,omitempty"`
+	Sig        string  `json:"sig,omitempty"`
+	UpdatedBy  string  `json:"updated_by"`
+	UpdatedAt  int64   `json:"updated_at"`
+	CreatedAt  int64   `json:"created_at"`
+	Role       string  `json:"role"`
+	Key        *string `json:"key"`
+	NeedsRekey bool    `json:"needs_rekey"`
+	// Accepted is false while the page waits in the caller's "Shared with
+	// me" list; AddedBy and AddedAt say who shared it with them and when.
+	Accepted bool          `json:"accepted"`
+	AddedBy  string        `json:"added_by"`
+	AddedAt  int64         `json:"added_at"`
+	Members  []memberView  `json:"members"`
+	Pending  []pendingView `json:"pending,omitempty"`
 }
 
 type pendingView struct {
@@ -56,22 +61,31 @@ type pendingView struct {
 // access loads doc and the caller's role in it, answering 404 (not 403, so
 // IDs can't be probed) if the caller isn't a member.
 func (a *API) access(c *gin.Context, doc string) (*database.Document, string, bool) {
+	d, m, ok := a.membership(c, doc)
+	if !ok {
+		return nil, "", false
+	}
+	return d, m.Role, true
+}
+
+// membership is access with the caller's whole membership row.
+func (a *API) membership(c *gin.Context, doc string) (*database.Document, *database.DocMember, bool) {
 	var m database.DocMember
 	err := a.db.Where("doc_id = ? AND user_id = ?", doc, me(c).ID).Take(&m).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		abort(c, http.StatusNotFound, "no such document")
-		return nil, "", false
+		return nil, nil, false
 	}
 	if err != nil {
 		dbError(c, err)
-		return nil, "", false
+		return nil, nil, false
 	}
 	var d database.Document
 	if err := a.db.Where("id = ?", doc).Take(&d).Error; err != nil {
 		dbError(c, err)
-		return nil, "", false
+		return nil, nil, false
 	}
-	return &d, m.Role, true
+	return &d, &m, true
 }
 
 // need checks the caller's role allows something, answering 403 if not.
@@ -145,10 +159,11 @@ func (a *API) keysFor(user string, docs []database.Document) (map[string]string,
 	return out, nil
 }
 
-func view(d *database.Document, role string, key string, members []memberView) docView {
+func view(d *database.Document, m *database.DocMember, key string, members []memberView) docView {
 	v := docView{
 		ID: d.ID, Version: d.Version, Epoch: d.KeyEpoch, HeadCt: d.HeadCt, UpdatedBy: d.UpdatedBy,
-		UpdatedAt: d.UpdatedAt, CreatedAt: d.CreatedAt, Role: role, NeedsRekey: d.NeedsRekey, Members: members,
+		UpdatedAt: d.UpdatedAt, CreatedAt: d.CreatedAt, Role: m.Role, NeedsRekey: d.NeedsRekey,
+		Accepted: m.Accepted, AddedBy: m.AddedBy, AddedAt: m.AddedAt, Members: members,
 	}
 	if key != "" {
 		v.Key = &key
@@ -168,10 +183,10 @@ func (a *API) listDocs(c *gin.Context) {
 		dbError(c, err)
 		return
 	}
-	role := map[string]string{}
+	mine := map[string]*database.DocMember{}
 	ids := make([]string, 0, len(roles))
-	for _, m := range roles {
-		role[m.DocID] = m.Role
+	for i, m := range roles {
+		mine[m.DocID] = &roles[i]
 		ids = append(ids, m.DocID)
 	}
 	var docs []database.Document
@@ -193,16 +208,17 @@ func (a *API) listDocs(c *gin.Context) {
 	}
 	out := make([]docView, len(docs))
 	for i := range docs {
-		out[i] = view(&docs[i], role[docs[i].ID], keys[docs[i].ID], members[docs[i].ID])
+		out[i] = view(&docs[i], mine[docs[i].ID], keys[docs[i].ID], members[docs[i].ID])
 	}
 	c.JSON(http.StatusOK, gin.H{"docs": out})
 }
 
 func (a *API) getDoc(c *gin.Context) {
-	d, role, ok := a.access(c, c.Param("id"))
+	d, m, ok := a.membership(c, c.Param("id"))
 	if !ok {
 		return
 	}
+	role := m.Role
 	members, err := a.members([]database.Document{*d})
 	if err != nil {
 		dbError(c, err)
@@ -213,7 +229,7 @@ func (a *API) getDoc(c *gin.Context) {
 		dbError(c, err)
 		return
 	}
-	v := view(d, role, keys[d.ID], members[d.ID])
+	v := view(d, m, keys[d.ID], members[d.ID])
 	v.BodyCt, v.Sig = d.BodyCt, d.Sig
 	if role == database.RoleOwner {
 		var pending []database.PendingShare
@@ -282,7 +298,7 @@ func (a *API) createDoc(c *gin.Context) {
 		if err := tx.Create(&d).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(&database.DocMember{DocID: d.ID, UserID: u.ID, Role: database.RoleOwner, AddedBy: u.ID, AddedAt: now}).Error; err != nil {
+		if err := tx.Create(&database.DocMember{DocID: d.ID, UserID: u.ID, Role: database.RoleOwner, AddedBy: u.ID, AddedAt: now, Accepted: true}).Error; err != nil {
 			return err
 		}
 		return tx.Create(&database.DocKey{DocID: d.ID, UserID: u.ID, Epoch: 1, WrappedKey: req.WrappedKey}).Error
@@ -403,6 +419,20 @@ func (a *API) leaveDoc(c *gin.Context) {
 	}
 	a.removeBlobFiles(blobs)
 	a.live.drop(d.ID, u.ID)
+	c.Status(http.StatusNoContent)
+}
+
+// acceptDoc moves a page shared with the caller by email out of their
+// "Shared with me" list and into their pages. Declining is leaving.
+func (a *API) acceptDoc(c *gin.Context) {
+	d, _, ok := a.access(c, c.Param("id"))
+	if !ok {
+		return
+	}
+	if err := a.db.Model(&database.DocMember{}).Where("doc_id = ? AND user_id = ?", d.ID, me(c).ID).Update("accepted", true).Error; err != nil {
+		dbError(c, err)
+		return
+	}
 	c.Status(http.StatusNoContent)
 }
 

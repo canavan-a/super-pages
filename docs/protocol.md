@@ -131,6 +131,14 @@ email), and the owner's app seals the key to them with `POST
 invitation. Once that address signs up, the next owner app to run sees it in
 `GET /v1/shares/todo` and finishes the share.
 
+**Accepting.** A page shared by email arrives unaccepted (`accepted: false`
+in `GET /v1/docs`, with `added_by` and `added_at`) and waits in the
+person's "Shared with me" list instead of among their pages, so nobody can
+fill someone else's pages by sharing at them. `POST /v1/docs/:id/accept`
+moves it in; declining is leaving (`POST /v1/docs/:id/leave`). Pages you
+make, and pages joined through a link (which is already a choice), start
+accepted.
+
 **By link** (owners only, edit or view): the link is
 `https://<server>/s/<link id>#<secret>`; the secret never reaches the server.
 From it: a link signing key (HKDF `sp-link-sign`) whose public half the

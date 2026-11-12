@@ -111,10 +111,18 @@ export function DocRow({
 }): React.JSX.Element {
   const theme = useTheme();
   const styles = makeStyles(theme);
-  const {summary, head, locked} = entry;
-  const title = head?.title || (locked ? 'Waiting for access' : 'Untitled');
+  const {summary, head, locked, unreadable} = entry;
+  const title =
+    head?.title ||
+    (unreadable
+      ? "Can't be opened"
+      : locked
+      ? 'Waiting for access'
+      : 'Untitled');
   const snippet = locked
-    ? "An owner's app will send you the key next time it opens."
+    ? unreadable
+      ? `${unreadable}. Hold to leave it.`
+      : "An owner's app will send you the key next time it opens."
     : (head?.snippet ?? '').replace(/\s+/g, ' ').trim();
   return (
     <Pressable

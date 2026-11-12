@@ -32,6 +32,9 @@ type DocMember struct {
 	Role    string
 	AddedBy string
 	AddedAt int64
+	// Accepted is false for a page shared by email that the person hasn't
+	// accepted yet; it waits in their "Shared with me" list.
+	Accepted bool
 }
 
 type DocKey struct {

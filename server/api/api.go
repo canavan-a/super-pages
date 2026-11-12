@@ -140,6 +140,7 @@ func (a *API) Router() *gin.Engine {
 	signed.GET("/docs/:id", reads, a.getDoc)
 	signed.DELETE("/docs/:id", writes, a.deleteDoc)
 	signed.POST("/docs/:id/leave", writes, a.leaveDoc)
+	signed.POST("/docs/:id/accept", writes, a.acceptDoc)
 	signed.POST("/docs/:id/share", a.shareByEmail)
 	signed.POST("/docs/:id/members", writes, a.addMember)
 	signed.PATCH("/docs/:id/members/:uid", writes, a.setRole)

@@ -49,6 +49,12 @@ export interface DocEntry {
   /** null while the key hasn't been sealed for this account yet. */
   head: DocHead | null;
   locked: boolean;
+  /**
+   * Set when this account has a key for the page but it doesn't open it
+   * (e.g. "invalid tag": the key was sealed wrong, or the page is damaged).
+   * The page can still be left.
+   */
+  unreadable?: string;
 }
 
 interface State {
@@ -109,8 +115,15 @@ function entry(s: Session, d: DocSummary): DocEntry {
       head: openHead(key, d.id, d.epoch, d.head_ct),
       locked: false,
     };
-  } catch {
-    return {summary: d, head: null, locked: true};
+  } catch (e) {
+    return {
+      summary: d,
+      head: null,
+      locked: true,
+      unreadable: `Couldn't decrypt it (${
+        (e as Error).message || 'unknown error'
+      })`,
+    };
   }
 }
 
@@ -278,6 +291,9 @@ export async function createDoc(markdown = '', title = ''): Promise<string> {
     role: 'owner',
     key: null,
     needs_rekey: false,
+    accepted: true,
+    added_by: me?.id ?? '',
+    added_at: res.updated_at,
     members: me
       ? [
           {
@@ -359,6 +375,31 @@ export async function leaveDoc(id: string): Promise<void> {
   const s = session.require();
   await api.leaveDoc(s.server, s.account, id);
   set({docs: state.docs.filter(e => e.summary.id !== id)});
+}
+
+/** Moves a page from "Shared with me" into my pages. */
+export async function acceptDoc(id: string): Promise<void> {
+  const s = session.require();
+  await api.acceptDoc(s.server, s.account, id);
+  patchSummary(id, {accepted: true});
+}
+
+/** Turns down a page shared with me: the same as leaving it. */
+export const declineDoc = leaveDoc;
+
+/**
+ * A page's sharing details without opening it, for when its content can't
+ * be decrypted but it should still be possible to leave it.
+ */
+export async function fetchDocInfo(id: string): Promise<DocFull> {
+  const s = session.require();
+  return api.doc(s.server, s.account, id);
+}
+
+/** Who shared a page with me, by name, if they're still in it. */
+export function sharedBy(d: DocSummary): string | null {
+  const m = d.members.find(x => x.id === d.added_by);
+  return m ? m.name || 'Someone' : null;
 }
 
 // ---- sharing ----

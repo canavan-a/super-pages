@@ -13,8 +13,17 @@ import {
 import {DocCard} from '../components/DocCard';
 import {DocRow, groupByDate} from '../components/DocRow';
 import {Icon} from '../components/Icon';
+import {InviteRow} from '../components/InviteRow';
 import {TypingDots} from '../components/TypingDots';
-import {createDoc, DocEntry, refreshDocs, useStore} from '../pagesStore';
+import {
+  acceptDoc,
+  createDoc,
+  declineDoc,
+  DocEntry,
+  refreshDocs,
+  useStore,
+} from '../pagesStore';
+import {platformConfirm} from '../platformConfirm';
 import type {Route} from '../routes';
 import {session} from '../session';
 import {useSetting} from '../settings';
@@ -28,11 +37,27 @@ export function DocsScreen({
 }): React.JSX.Element {
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const docs = useStore(s => s.docs);
+  const all = useStore(s => s.docs);
+  // Pages shared with me by email wait in "Shared with me" until I accept
+  // them, so nobody can fill my pages by sharing at me.
+  const docs = useMemo(
+    () => all.filter(e => e.summary.accepted !== false),
+    [all],
+  );
+  const invites = useMemo(
+    () =>
+      all
+        .filter(e => e.summary.accepted === false)
+        .sort((a, b) => b.summary.added_at - a.summary.added_at),
+    [all],
+  );
   const loaded = useStore(s => s.loaded);
   const error = useStore(s => s.error);
+  const [tab, setTab] = useState<'mine' | 'shared'>('mine');
   const [pulling, setPulling] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
   const {width} = useWindowDimensions();
   // Two columns on a phone, more on a wide browser window.
   const columns = width >= 1100 ? 4 : width >= 760 ? 3 : 2;
@@ -69,11 +94,56 @@ export function DocsScreen({
 
   const open = (e: DocEntry) => () =>
     onNavigate({name: 'doc', id: e.summary.id});
-  const settingsFor = (e: DocEntry) =>
-    e.locked
-      ? undefined
-      : () =>
-          onNavigate({name: 'docSettings', id: e.summary.id, fromHome: true});
+  // Locked and unreadable pages too: settings is where they can be left.
+  const settingsFor = (e: DocEntry) => () =>
+    onNavigate({name: 'docSettings', id: e.summary.id, fromHome: true});
+
+  const answer = async (e: DocEntry, f: (id: string) => Promise<void>) => {
+    setInviteError(null);
+    setAnswering(e.summary.id);
+    try {
+      await f(e.summary.id);
+    } catch (err) {
+      setInviteError((err as Error).message);
+    } finally {
+      setAnswering(null);
+    }
+  };
+  const accept = (e: DocEntry) => answer(e, acceptDoc);
+  const decline = (e: DocEntry) =>
+    platformConfirm(
+      'Decline page',
+      'Decline this page? It goes away, and you lose access until someone shares it with you again.',
+      'Decline',
+      () => answer(e, declineDoc),
+    );
+
+  const tabs = (
+    <View style={styles.tabs} accessibilityRole="tablist">
+      {(
+        [
+          ['mine', 'My pages'],
+          ['shared', 'Shared with me'],
+        ] as const
+      ).map(([key, label]) => (
+        <Pressable
+          key={key}
+          style={[styles.tab, tab === key && styles.tabActive]}
+          onPress={() => setTab(key)}
+          accessibilityRole="tab"
+          accessibilityState={{selected: tab === key}}>
+          <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>
+            {label}
+          </Text>
+          {key === 'shared' && invites.length > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{invites.length}</Text>
+            </View>
+          )}
+        </Pressable>
+      ))}
+    </View>
+  );
 
   const refreshControl = (
     <RefreshControl
@@ -99,8 +169,57 @@ export function DocsScreen({
     </View>
   );
 
+  if (tab === 'shared') {
+    return (
+      <View style={styles.container}>
+        {tabs}
+        <FlatList
+          data={invites}
+          keyExtractor={d => d.summary.id}
+          contentContainerStyle={[
+            styles.flat,
+            invites.length === 0 && styles.listEmpty,
+          ]}
+          refreshControl={refreshControl}
+          ListHeaderComponent={
+            <>
+              {header}
+              {inviteError && (
+                <Pressable
+                  style={styles.error}
+                  onPress={() => setInviteError(null)}>
+                  <Text style={styles.errorText}>{inviteError}</Text>
+                </Pressable>
+              )}
+            </>
+          }
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Icon name="invite" size={36} color={theme.textMuted} />
+              <Text style={styles.emptyTitle}>Nothing new</Text>
+              <Text style={styles.emptyBody}>
+                When someone shares a page with you, it waits here until you
+                accept it.
+              </Text>
+            </View>
+          }
+          renderItem={({item}) => (
+            <InviteRow
+              entry={item}
+              busy={answering === item.summary.id}
+              onOpen={open(item)}
+              onAccept={() => accept(item)}
+              onDecline={() => decline(item)}
+            />
+          )}
+        />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
+      {tabs}
       {view === 'list' ? (
         <SectionList
           sections={sections}
@@ -170,6 +289,44 @@ export function DocsScreen({
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     container: {flex: 1, backgroundColor: theme.bg},
+    tabs: {
+      flexDirection: 'row',
+      gap: 6,
+      paddingHorizontal: 12,
+      paddingTop: 10,
+      paddingBottom: 4,
+      maxWidth: 1200,
+      width: '100%',
+      alignSelf: 'center',
+    },
+    tab: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    tabActive: {backgroundColor: theme.surface, borderColor: theme.text},
+    tabText: {fontSize: 14, fontWeight: '600', color: theme.textMuted},
+    tabTextActive: {color: theme.text},
+    badge: {
+      minWidth: 18,
+      height: 18,
+      paddingHorizontal: 5,
+      borderRadius: 9,
+      backgroundColor: theme.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    badgeText: {
+      color: theme.primaryText,
+      fontSize: 11,
+      fontWeight: '700',
+      fontVariant: ['tabular-nums'],
+    },
     center: {
       flex: 1,
       alignItems: 'center',
