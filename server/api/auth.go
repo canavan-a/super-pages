@@ -71,6 +71,8 @@ func (a *API) requireSignature(maxBody int64) gin.HandlerFunc {
 		tsMs, err := strconv.ParseInt(ts, 10, 64)
 		now := a.now()
 		if err != nil || absDur(now.Sub(time.UnixMilli(tsMs))) > maxSkew {
+			// The app corrects its clock from this and signs again.
+			c.Header("X-SP-Time", strconv.FormatInt(now.UnixMilli(), 10))
 			abort(c, http.StatusUnauthorized, "request timestamp out of range; check the device clock")
 			return
 		}

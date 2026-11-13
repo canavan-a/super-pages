@@ -68,7 +68,9 @@ X-SP-Nonce: <≤64 chars>          not reused within 5 minutes
 X-SP-Sig:   b64(Ed25519("SP1\n" METHOD "\n" path?query "\n" ts "\n" nonce "\n" hex(sha256(body))))
 ```
 
-There are no sessions or tokens.
+There are no sessions or tokens. A request whose timestamp is out of range
+is refused with 401 and `X-SP-Time: <unix ms>`, the server's clock; the app
+keeps the offset and signs again.
 
 ## Documents
 

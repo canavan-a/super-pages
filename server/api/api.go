@@ -105,7 +105,7 @@ func (a *API) Router() *gin.Engine {
 	corsConfig.AllowAllOrigins = true
 	corsConfig.AllowHeaders = []string{"Content-Type", "X-SP-Key", "X-SP-Ts", "X-SP-Nonce", "X-SP-Sig"}
 	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-	corsConfig.ExposeHeaders = []string{"Retry-After"}
+	corsConfig.ExposeHeaders = []string{"Retry-After", "X-SP-Time"}
 	r.Use(cors.New(corsConfig))
 
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true, "app": "superpages"}) })

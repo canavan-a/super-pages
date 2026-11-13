@@ -12,13 +12,26 @@ export class ApiError extends Error {
   }
 }
 
+// The server's clock minus ours. A device whose clock is off by more than
+// the server allows (±60 s) gets its request refused with the server's time
+// in X-SP-Time; we keep the difference and sign again with it.
+let clockOffset = 0;
+
+/** Learns the server's clock from a refused timestamp; true to sign again. */
+function adjustClock(status: number, serverTime: string | null): boolean {
+  const t = Number(serverTime);
+  if (status !== 401 || !serverTime || !Number.isFinite(t)) return false;
+  clockOffset = t - Date.now();
+  return true;
+}
+
 function signedHeaders(
   by: Signer,
   method: string,
   pathQuery: string,
   body: Uint8Array,
 ): Record<string, string> {
-  const ts = String(Date.now());
+  const ts = String(Date.now() + clockOffset);
   const nonce = newId();
   const msg = utf8(
     `SP1\n${method}\n${pathQuery}\n${ts}\n${nonce}\n${bytesToHex(
@@ -56,31 +69,42 @@ export async function request<T>(
 ): Promise<T> {
   const text = body === undefined ? '' : JSON.stringify(body);
   const bytes = utf8(text);
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), timeoutMs);
   let res: Response;
   let out: string;
-  try {
-    res = await fetch(server + path, {
-      method,
-      headers: {
-        ...(by ? signedHeaders(by, method, path, bytes) : {}),
-        ...(body !== undefined ? {'Content-Type': 'application/json'} : {}),
-      },
-      body: body === undefined ? undefined : text,
-      signal: abort.signal,
-      keepalive,
-    });
-    out = await res.text();
-  } catch (e) {
-    if (abort.signal.aborted)
+  for (let attempt = 0; ; attempt++) {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    try {
+      res = await fetch(server + path, {
+        method,
+        headers: {
+          ...(by ? signedHeaders(by, method, path, bytes) : {}),
+          ...(body !== undefined ? {'Content-Type': 'application/json'} : {}),
+        },
+        body: body === undefined ? undefined : text,
+        signal: abort.signal,
+        keepalive,
+      });
+      out = await res.text();
+    } catch (e) {
+      if (abort.signal.aborted)
+        throw new ApiError(
+          0,
+          `${server.replace(/^https?:\/\//, '')} didn't answer`,
+        );
       throw new ApiError(
         0,
-        `${server.replace(/^https?:\/\//, '')} didn't answer`,
+        `Can't reach ${server.replace(/^https?:\/\//, '')}`,
       );
-    throw new ApiError(0, `Can't reach ${server.replace(/^https?:\/\//, '')}`);
-  } finally {
-    clearTimeout(timer);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (
+      !by ||
+      attempt > 0 ||
+      !adjustClock(res.status, res.headers.get('X-SP-Time'))
+    )
+      break;
   }
   let json: any = null;
   try {
@@ -95,7 +119,7 @@ export async function request<T>(
 
 // Binary transfers go through XMLHttpRequest: React Native's fetch can't
 // read a response as an ArrayBuffer, but its XHR can (responseType).
-function xhr(
+async function xhr(
   server: string,
   method: 'GET' | 'PUT',
   path: string,
@@ -103,6 +127,19 @@ function xhr(
   body?: Uint8Array,
   onProgress?: (fraction: number) => void,
 ): Promise<{status: number; data: any}> {
+  const res = await xhrOnce(server, method, path, by, body, onProgress);
+  if (!adjustClock(res.status, res.serverTime)) return res;
+  return xhrOnce(server, method, path, by, body, onProgress);
+}
+
+function xhrOnce(
+  server: string,
+  method: 'GET' | 'PUT',
+  path: string,
+  by: Signer,
+  body?: Uint8Array,
+  onProgress?: (fraction: number) => void,
+): Promise<{status: number; data: any; serverTime: string | null}> {
   return new Promise((resolve, reject) => {
     const req = new XMLHttpRequest();
     req.open(method, server + path);
@@ -122,7 +159,12 @@ function xhr(
         e.lengthComputable &&
         onProgress(Math.min(1, e.loaded / (e.total * scale)));
     }
-    req.onload = () => resolve({status: req.status, data: req.response});
+    req.onload = () =>
+      resolve({
+        status: req.status,
+        data: req.response,
+        serverTime: req.getResponseHeader('X-SP-Time'),
+      });
     req.timeout = method === 'PUT' ? UPLOAD_TIMEOUT_MS : DOWNLOAD_TIMEOUT_MS;
     req.ontimeout = () => reject(new ApiError(0, 'timed out'));
     req.onerror = () => reject(new ApiError(0, 'network error'));

@@ -226,6 +226,20 @@ func TestSignatureAndReplay(t *testing.T) {
 			t.Fatalf("attempt %d: %d", i, w.Code)
 		}
 	}
+	// A device clock five minutes off is refused with the server's time.
+	ts = strconv.FormatInt(time.Now().Add(-5*time.Minute).UnixMilli(), 10)
+	msg = proto.RequestSigningString("GET", "/v1/me", ts, "n2", data)
+	req := httptest.NewRequest("GET", "/v1/me", nil)
+	req.Header.Set("X-SP-Key", u.key)
+	req.Header.Set("X-SP-Ts", ts)
+	req.Header.Set("X-SP-Nonce", "n2")
+	req.Header.Set("X-SP-Sig", proto.B64.EncodeToString(ed25519.Sign(u.priv, msg)))
+	w := httptest.NewRecorder()
+	e.srv.ServeHTTP(w, req)
+	serverTime, err := strconv.ParseInt(w.Header().Get("X-SP-Time"), 10, 64)
+	if w.Code != 401 || err != nil || absDur(time.Since(time.UnixMilli(serverTime))) > 5*time.Second {
+		t.Fatalf("skewed: %d %q", w.Code, w.Header().Get("X-SP-Time"))
+	}
 }
 
 const testInvite = "Scroll Badger"
