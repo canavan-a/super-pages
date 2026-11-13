@@ -1,9 +1,12 @@
+import type {DocKind} from '../crypto';
 import type {Theme} from '../theme';
 import type {EditorColors, EditorUser, Peer, Snapshot} from './core';
 
 export type {EditorUser, Peer, Snapshot};
 
 export interface DocEditorProps {
+  /** A page of text (the default) or a canvas. */
+  kind?: DocKind;
   /** The page as it was opened. Later changes come from the editor itself. */
   markdown: string;
   /** The shared state as it was opened (b64url), or null for a markdown-only page. */

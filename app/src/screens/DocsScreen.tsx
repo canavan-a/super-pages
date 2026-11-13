@@ -23,6 +23,7 @@ import {
   refreshDocs,
   useStore,
 } from '../pagesStore';
+import type {DocKind} from '../crypto';
 import {platformConfirm} from '../platformConfirm';
 import type {Route} from '../routes';
 import {session} from '../session';
@@ -56,6 +57,8 @@ export function DocsScreen({
   const [tab, setTab] = useState<'mine' | 'shared'>('mine');
   const [pulling, setPulling] = useState(false);
   const [creating, setCreating] = useState(false);
+  // The new-page button's choice: a page of text or a canvas.
+  const [choosing, setChoosing] = useState(false);
   const [answering, setAnswering] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const {width} = useWindowDimensions();
@@ -73,11 +76,12 @@ export function DocsScreen({
     refreshDocs().finally(() => setPulling(false));
   }, []);
 
-  const newPage = async () => {
+  const newDoc = async (kind: DocKind) => {
+    setChoosing(false);
     if (creating) return;
     setCreating(true);
     try {
-      const id = await createDoc('');
+      const id = await createDoc('', '', kind);
       onNavigate({name: 'doc', id, fresh: true});
     } finally {
       setCreating(false);
@@ -270,16 +274,50 @@ export function DocsScreen({
           )}
         />
       )}
+      {choosing && (
+        <>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setChoosing(false)}
+            accessibilityLabel="Close"
+          />
+          <View style={styles.newMenu}>
+            {(
+              [
+                ['page', 'pencil', 'Page'],
+                ['canvas', 'canvas', 'Canvas'],
+              ] as const
+            ).map(([kind, icon, label]) => (
+              <Pressable
+                key={kind}
+                style={({pressed}) => [
+                  styles.newItem,
+                  pressed && styles.fabPressed,
+                ]}
+                onPress={() => newDoc(kind)}
+                accessibilityRole="button"
+                accessibilityLabel={`New ${label.toLowerCase()}`}>
+                <Icon name={icon} size={18} color={theme.text} />
+                <Text style={styles.newItemText}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
+      )}
       <Pressable
         style={({pressed}) => [styles.fab, pressed && styles.fabPressed]}
-        onPress={newPage}
+        onPress={() => setChoosing(c => !c)}
         accessibilityRole="button"
-        accessibilityLabel="New page"
+        accessibilityLabel="New page or canvas"
         disabled={creating}>
         {creating ? (
           <TypingDots color={theme.primaryText} />
         ) : (
-          <Icon name="plus" size={26} color={theme.primaryText} />
+          <Icon
+            name={choosing ? 'close' : 'plus'}
+            size={26}
+            color={theme.primaryText}
+          />
         )}
       </Pressable>
     </View>
@@ -404,5 +442,29 @@ function makeStyles(theme: Theme) {
       shadowOffset: {width: 0, height: 3},
     },
     fabPressed: {opacity: 0.85},
+    newMenu: {
+      position: 'absolute',
+      right: 20,
+      bottom: 94,
+      gap: 8,
+      alignItems: 'flex-end',
+    },
+    newItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 11,
+      borderRadius: 22,
+      backgroundColor: theme.surface,
+      borderWidth: 1,
+      borderColor: theme.border,
+      elevation: 4,
+      shadowColor: '#000',
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      shadowOffset: {width: 0, height: 2},
+    },
+    newItemText: {color: theme.text, fontSize: 15, fontWeight: '600'},
   });
 }

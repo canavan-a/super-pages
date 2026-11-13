@@ -16,6 +16,7 @@ import {
 import {
   b64,
   DocHead,
+  DocKind,
   formatShareLink,
   makeHead,
   decodeBody,
@@ -201,6 +202,8 @@ export interface OpenDoc {
   title: string;
   /** False if the last save's signature didn't check out against its writer's key. */
   verified: boolean;
+  /** A page of text, or a canvas. */
+  kind: DocKind;
 }
 
 export class LockedError extends Error {
@@ -217,7 +220,7 @@ export async function openDoc(id: string): Promise<OpenDoc> {
   const key = docKey(s, doc);
   if (!key) throw new LockedError();
   const body = openBody(key, doc.id, doc.epoch, doc.body_ct);
-  const {markdown, y} = decodeBody(body);
+  const {markdown, y, kind = 'page'} = decodeBody(body);
   const {title} = openHead(key, doc.id, doc.epoch, doc.head_ct);
   const writer = doc.members.find(m => m.id === doc.updated_by);
   const verified =
@@ -231,7 +234,7 @@ export async function openDoc(id: string): Promise<OpenDoc> {
       doc.body_ct,
       doc.sig,
     );
-  return {doc, key, markdown, y, body, title, verified};
+  return {doc, key, markdown, y, body, title, verified, kind};
 }
 
 function sealed(
@@ -243,9 +246,10 @@ function sealed(
   markdown: string,
   title: string,
   y: string | null = null,
-  body = encodeBody({markdown, y}),
+  kind: DocKind = 'page',
+  body = encodeBody({markdown, y, kind}),
 ) {
-  const head = makeHead(title, markdown);
+  const head = makeHead(title, markdown, kind);
   const head_ct = sealHead(key, id, epoch, head);
   const body_ct = sealBody(key, id, epoch, body);
   return {
@@ -256,7 +260,11 @@ function sealed(
   };
 }
 
-export async function createDoc(markdown = '', title = ''): Promise<string> {
+export async function createDoc(
+  markdown = '',
+  title = '',
+  kind: DocKind = 'page',
+): Promise<string> {
   const s = session.require();
   const id = newId();
   const key = newDocKey();
@@ -268,6 +276,8 @@ export async function createDoc(markdown = '', title = ''): Promise<string> {
     key,
     markdown,
     title,
+    kind === 'canvas' ? '' : null,
+    kind,
   );
   const res = await api.createDoc(s.server, s.account, {
     id,
@@ -327,6 +337,7 @@ export async function saveDoc(
   markdown: string,
   title: string,
   y: string | null = null,
+  kind: DocKind = 'page',
 ): Promise<number> {
   const s = session.require();
   const {head, head_ct, body_ct, sig} = sealed(
@@ -338,6 +349,7 @@ export async function saveDoc(
     markdown,
     title,
     y,
+    kind,
   );
   try {
     const res = await api.saveDoc(s.server, s.account, id, {
@@ -457,7 +469,7 @@ export async function cancelPending(
  */
 export async function rekey(id: string, remove: string[] = []): Promise<void> {
   const s = session.require();
-  const {doc, markdown, title, y, body} = await openDoc(id);
+  const {doc, markdown, title, y, body, kind} = await openDoc(id);
   const epoch = doc.epoch + 1;
   const key = newDocKey();
   const stay = doc.members.filter((m: Member) => !remove.includes(m.id));
@@ -470,6 +482,7 @@ export async function rekey(id: string, remove: string[] = []): Promise<void> {
     markdown,
     title,
     y,
+    kind,
     body,
   );
   const wrapped: Record<string, string> = {};

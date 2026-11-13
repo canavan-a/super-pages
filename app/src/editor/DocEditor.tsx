@@ -68,6 +68,7 @@ export const DocEditor = forwardRef<DocEditorRef, DocEditorProps>(
           setReady(true);
           send({
             type: 'init',
+            kind: live.current.kind ?? 'page',
             markdown: live.current.markdown,
             y: live.current.y,
             title: live.current.title,

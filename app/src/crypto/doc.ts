@@ -18,9 +18,14 @@ import {
   verify,
 } from './primitives';
 
+/** What a document is: a page of text, or a canvas drawn on together. */
+export type DocKind = 'page' | 'canvas';
+
 export interface DocHead {
   title: string;
   snippet: string;
+  /** Left out for a page, so heads from older apps read as pages. */
+  kind?: DocKind;
 }
 
 export const newDocKey = (): Uint8Array => randomBytes(32);
@@ -66,7 +71,9 @@ export function openHead(
   const snippet = decodeEntities(String(h?.snippet ?? ''))
     .replace(/[ \t ]+/g, ' ')
     .trim();
-  return {title: String(h?.title ?? ''), snippet};
+  return h?.kind === 'canvas'
+    ? {title: String(h?.title ?? ''), snippet, kind: 'canvas'}
+    : {title: String(h?.title ?? ''), snippet};
 }
 
 export function sealBody(
@@ -171,9 +178,13 @@ export function openLive(
 export interface DocBody {
   markdown: string;
   y: string | null;
+  /** 'canvas' for a canvas (always with y); a page otherwise. */
+  kind?: DocKind;
 }
 
 export function encodeBody(b: DocBody): string {
+  if (b.kind === 'canvas')
+    return JSON.stringify({v: 2, md: '', y: b.y ?? '', kind: 'canvas'});
   return b.y === null
     ? b.markdown
     : JSON.stringify({v: 2, md: b.markdown, y: b.y});
@@ -184,7 +195,9 @@ export function decodeBody(text: string): DocBody {
     try {
       const j = JSON.parse(text);
       if (typeof j.md === 'string' && typeof j.y === 'string')
-        return {markdown: j.md, y: j.y};
+        return j.kind === 'canvas'
+          ? {markdown: '', y: j.y, kind: 'canvas'}
+          : {markdown: j.md, y: j.y};
     } catch {
       // markdown that happens to start that way
     }
@@ -229,7 +242,13 @@ export function plainText(md: string): string {
 }
 
 /** The head: the page's own title (set apart from its text) and a snippet of the text for the grid. */
-export function makeHead(title: string, md: string): DocHead {
+export function makeHead(
+  title: string,
+  md: string,
+  kind: DocKind = 'page',
+): DocHead {
+  if (kind === 'canvas')
+    return {title: title.trim().slice(0, 120), snippet: '', kind: 'canvas'};
   // Each paragraph on its own line, and the editor's empty paragraphs
   // ("&nbsp;") kept as blank lines, so the grid shows the page's shape.
   const blocks: string[] = [];

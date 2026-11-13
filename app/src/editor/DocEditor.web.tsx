@@ -2,6 +2,7 @@
 import React, {forwardRef, useEffect, useImperativeHandle, useRef} from 'react';
 
 import {useTheme} from '../theme';
+import {mountCanvas} from './canvas';
 import {EditorHandle, mountEditor} from './core';
 import {colorsFor, DocEditorProps, DocEditorRef} from './types';
 
@@ -17,7 +18,8 @@ export const DocEditor = forwardRef<DocEditorRef, DocEditorProps>(
 
     useEffect(() => {
       if (!host.current) return;
-      handle.current = mountEditor({
+      const mount = props.kind === 'canvas' ? mountCanvas : mountEditor;
+      handle.current = mount({
         el: host.current,
         markdown: props.markdown,
         y: props.y,

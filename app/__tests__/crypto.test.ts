@@ -208,6 +208,28 @@ test('page bodies carry the shared editing state; older ones are markdown', () =
   expect(decodeBody('{"v":2, not json').y).toBeNull();
 });
 
+test('a canvas says so in its body and head; pages leave it out', () => {
+  const canvas = {markdown: '', y: 'AQID', kind: 'canvas' as const};
+  expect(decodeBody(encodeBody(canvas))).toEqual(canvas);
+  // A new canvas has no state yet, and is still a canvas.
+  expect(decodeBody(encodeBody({markdown: '', y: '', kind: 'canvas'}))).toEqual(
+    {markdown: '', y: '', kind: 'canvas'},
+  );
+  expect(decodeBody(encodeBody({markdown: 'hi', y: 'AQID'})).kind).toBe(
+    undefined,
+  );
+
+  const key = newDocKey();
+  const doc = newId();
+  const head = makeHead(' Sketch ', '', 'canvas');
+  expect(head).toEqual({title: 'Sketch', snippet: '', kind: 'canvas'});
+  expect(openHead(key, doc, 1, sealHead(key, doc, 1, head))).toEqual(head);
+  // Pages' heads are as before, so older apps read them the same.
+  const page = makeHead('Notes', 'hi');
+  expect(page).toEqual({title: 'Notes', snippet: 'hi'});
+  expect(openHead(key, doc, 1, sealHead(key, doc, 1, page))).toEqual(page);
+});
+
 test('live changes are bound to their page and key', () => {
   const doc = newId();
   const key = newDocKey();

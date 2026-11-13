@@ -2,6 +2,7 @@
 // DocEditor.tsx over postMessage: the app sends the page and theme in and
 // answers image lookups; the page sends changes out. The WebView never
 // touches the network: images arrive as data: URIs the app decrypted.
+import {mountCanvas} from './canvas';
 import {
   EditorColors,
   EditorHandle,
@@ -13,6 +14,7 @@ import {
 type In =
   | {
       type: 'init';
+      kind?: 'page' | 'canvas';
       markdown: string;
       y: string | null;
       title: string;
@@ -57,7 +59,7 @@ function onMessage(raw: unknown) {
     case 'init': {
       document.body.style.background = m.colors.bg;
       handle?.destroy();
-      handle = mountEditor({
+      handle = (m.kind === 'canvas' ? mountCanvas : mountEditor)({
         el: document.getElementById('root')!,
         markdown: m.markdown,
         y: m.y,

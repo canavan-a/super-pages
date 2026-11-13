@@ -136,6 +136,7 @@ export function DocScreen({
                 snap.markdown,
                 snap.title,
                 snap.y,
+                opened.kind,
               );
               base.current.version = v;
               savedEdits.current = n;
@@ -402,7 +403,7 @@ export function DocScreen({
       subtitle: status,
       viewers: here,
       actions: [
-        ...(canWrite
+        ...(canWrite && opened.kind !== 'canvas'
           ? [{label: 'Add image', icon: 'image' as const, onPress: pickImage}]
           : []),
         {
@@ -507,6 +508,7 @@ export function DocScreen({
       <DocEditor
         key={generation}
         ref={editor}
+        kind={opened.kind}
         markdown={opened.markdown}
         y={opened.y}
         title={opened.title}

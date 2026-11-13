@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Brush,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -45,6 +46,7 @@ import {
 // one super-badger uses, so both apps draw icons the same way. It renders
 // through react-native-svg, whose web resolution is fixed in vite.config.ts.
 export type IconName =
+  | 'canvas'
   | 'kebab'
   | 'gear'
   | 'chevron-left'
@@ -123,6 +125,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   retry: RefreshCw,
   grid: LayoutGrid,
   rows: Rows3,
+  canvas: Brush,
 };
 
 export function Icon({

@@ -58,6 +58,9 @@ export function DocCard({
           numberOfLines={2}>
           {title}
         </Text>
+        {head?.kind === 'canvas' && (
+          <Icon name="canvas" size={14} color={theme.textMuted} />
+        )}
         {summary.role === 'view' && (
           <Icon name="eye" size={14} color={theme.textMuted} />
         )}
@@ -70,6 +73,11 @@ export function DocCard({
               ? `${unreadable}. Hold to leave it.`
               : "An owner's app will send you the key next time it opens."}
           </Text>
+        </View>
+      ) : head?.kind === 'canvas' ? (
+        <View style={styles.canvasBox}>
+          <Icon name="canvas" size={28} color={theme.textMuted} />
+          <Text style={styles.lockedText}>Canvas</Text>
         </View>
       ) : (
         <Text style={styles.snippet} numberOfLines={5}>
@@ -119,6 +127,13 @@ function makeStyles(theme: Theme) {
       color: theme.textMuted,
     },
     lockedBox: {flex: 1, marginTop: 8, gap: 6},
+    canvasBox: {
+      flex: 1,
+      marginTop: 8,
+      gap: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     lockedText: {fontSize: 12, lineHeight: 16, color: theme.textMuted},
     footer: {
       flexDirection: 'row',

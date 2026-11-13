@@ -392,13 +392,13 @@ const BUTTONS: (Btn | '|')[] = [
   },
 ];
 
-function css(c: EditorColors): string {
+export function css(c: EditorColors): string {
   return `
 .sp-editor { --bg:${c.bg}; --surface:${c.surface}; --surface-alt:${c.surfaceAlt}; --border:${c.border}; --text:${c.text};
   --muted:${c.textMuted}; --primary:${c.primary}; --primary-text:${c.primaryText}; --code-bg:${c.codeBg}; --inline-code:${c.inlineCodeBg}; }`;
 }
 
-const BASE_CSS = `
+export const BASE_CSS = `
 .sp-editor { display:flex; flex-direction:column; height:100%; background:var(--bg); color:var(--text);
   font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 .sp-toolbar { display:flex; gap:2px; padding:6px 8px; border-bottom:1px solid var(--border); overflow-x:auto;
@@ -460,20 +460,38 @@ const BASE_CSS = `
 const REMOTE = 'remote';
 const LOAD = 'load';
 
-const toB64 = (u: Uint8Array): string => {
+export const toB64 = (u: Uint8Array): string => {
   let s = '';
   for (let i = 0; i < u.length; i += 0x8000)
     s += String.fromCharCode(...u.subarray(i, i + 0x8000));
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 };
 
-const fromB64 = (s: string): Uint8Array => {
+export const fromB64 = (s: string): Uint8Array => {
   const t = s.replace(/-/g, '+').replace(/_/g, '/');
   const bin = atob(t + '='.repeat((4 - (t.length % 4)) % 4));
   const u = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
   return u;
 };
+
+/** Takes in the others' cursors, and drops those of tabs no longer here. */
+export function applyPeers(awareness: Awareness, peers: Peer[]): void {
+  for (const p of peers) {
+    if (!p.aware) continue;
+    try {
+      applyAwarenessUpdate(awareness, fromB64(p.aware), REMOTE);
+    } catch {
+      // skip it
+    }
+  }
+  const here = new Set(peers.map(p => p.tab));
+  const gone: number[] = [];
+  awareness.getStates().forEach((st, id) => {
+    if (id !== awareness.clientID && !here.has(st?.tab)) gone.push(id);
+  });
+  if (gone.length) removeAwarenessStates(awareness, gone, REMOTE);
+}
 
 /**
  * Tab writes, as in a word processor, instead of leaving the page: in a list
@@ -724,22 +742,7 @@ export function mountEditor(o: EditorOptions): EditorHandle {
         }
       }
     },
-    setPeers(peers) {
-      for (const p of peers) {
-        if (!p.aware) continue;
-        try {
-          applyAwarenessUpdate(awareness, fromB64(p.aware), REMOTE);
-        } catch {
-          // skip it
-        }
-      }
-      const here = new Set(peers.map(p => p.tab));
-      const gone: number[] = [];
-      awareness.getStates().forEach((st, id) => {
-        if (id !== awareness.clientID && !here.has(st?.tab)) gone.push(id);
-      });
-      if (gone.length) removeAwarenessStates(awareness, gone, REMOTE);
-    },
+    setPeers: peers => applyPeers(awareness, peers),
     setTitle(title) {
       if (title === ytitle.toString()) return;
       ydoc.transact(() => {

@@ -123,6 +123,8 @@ export function DocRow({
     ? unreadable
       ? `${unreadable}. Hold to leave it.`
       : "An owner's app will send you the key next time it opens."
+    : head?.kind === 'canvas'
+    ? 'Canvas'
     : (head?.snippet ?? '').replace(/\s+/g, ' ').trim();
   return (
     <Pressable
@@ -146,6 +148,9 @@ export function DocRow({
       <View style={styles.main}>
         <View style={styles.titleLine}>
           {locked && <Icon name="lock" size={13} color={theme.textMuted} />}
+          {!locked && head?.kind === 'canvas' && (
+            <Icon name="canvas" size={13} color={theme.textMuted} />
+          )}
           <Text
             style={[styles.title, !head?.title && styles.muted]}
             numberOfLines={1}>
