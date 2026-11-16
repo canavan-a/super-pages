@@ -49,6 +49,7 @@ const LOCK_OPTIONS = [
   {min: 1, label: '1 min'},
   {min: 5, label: '5 min'},
   {min: 30, label: '30 min'},
+  {min: -1, label: 'Never'},
 ];
 
 export function SettingsScreen({
@@ -119,6 +120,21 @@ export function SettingsScreen({
       if (on) await storeIdentity(sess!.server, sess!.account.entropy, true);
       else await forgetIdentity();
       setRemembered(on);
+    });
+
+  // Crossing to or from Never re-stores the key with or without the
+  // biometrics/PIN gate, so launches follow the setting too.
+  const setLockAfter = (min: number) =>
+    run(async () => {
+      if (s.lockAfterMin < 0 !== min < 0) {
+        await storeIdentity(
+          sess!.server,
+          sess!.account.entropy,
+          true,
+          min >= 0,
+        );
+      }
+      await settingsStore.update({lockAfterMin: min});
     });
 
   const signOut = () =>
@@ -413,7 +429,7 @@ export function SettingsScreen({
               <Pressable
                 key={o.min}
                 style={[styles.chip, s.lockAfterMin === o.min && styles.chipOn]}
-                onPress={() => settingsStore.update({lockAfterMin: o.min})}>
+                onPress={() => setLockAfter(o.min)}>
                 <Text
                   style={[
                     styles.chipText,
@@ -424,6 +440,12 @@ export function SettingsScreen({
               </Pressable>
             ))}
           </View>
+          {s.lockAfterMin < 0 && (
+            <Text style={styles.hint}>
+              Super Pages opens without your fingerprint or PIN. Anyone who can
+              unlock this phone can read your pages.
+            </Text>
+          )}
         </>
       )}
       <Text style={styles.hint}>

@@ -9,8 +9,9 @@ import {b64, unb64} from './crypto';
 const SERVICE = 'superpages.identity.v1';
 const MODE_KEY = 'superpages.keystore.mode';
 
-/** 'biometric': needs biometrics or the screen-lock PIN to open. 'none': the
- * device has no screen lock, so the Keystore can't require one. */
+/** 'biometric': needs biometrics or the screen-lock PIN to open. 'none': no
+ * prompt — the lock is set to Never, or the device has no screen lock, so the
+ * Keystore can't require one. */
 export type LockMode = 'biometric' | 'none';
 
 export interface Stored {
@@ -25,28 +26,32 @@ export async function hasStoredIdentity(): Promise<boolean> {
   return services.includes(SERVICE);
 }
 
-/** remember is for the browser (keystore.web.ts); a phone always remembers. */
+/** remember is for the browser (keystore.web.ts); a phone always remembers.
+ * requireAuth false (the "Never" lock setting) keeps the key without the
+ * biometrics/PIN gate, so the app opens straight in. */
 export async function storeIdentity(
   server: string,
   entropy: Uint8Array,
   _remember = true,
+  requireAuth = true,
 ): Promise<LockMode> {
   await Keychain.resetGenericPassword({service: SERVICE}).catch(() => {});
-  try {
-    const ok = await Keychain.setGenericPassword(server, b64(entropy), {
-      service: SERVICE,
-      accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
-      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-      storage: Keychain.STORAGE_TYPE.RSA,
-      securityLevel: Keychain.SECURITY_LEVEL.ANY,
-    });
-    if (ok) {
-      await AsyncStorage.setItem(MODE_KEY, 'biometric');
-      return 'biometric';
+  if (requireAuth)
+    try {
+      const ok = await Keychain.setGenericPassword(server, b64(entropy), {
+        service: SERVICE,
+        accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
+        accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+        storage: Keychain.STORAGE_TYPE.RSA,
+        securityLevel: Keychain.SECURITY_LEVEL.ANY,
+      });
+      if (ok) {
+        await AsyncStorage.setItem(MODE_KEY, 'biometric');
+        return 'biometric';
+      }
+    } catch {
+      // No biometrics or screen lock set up: fall through.
     }
-  } catch {
-    // No biometrics or screen lock set up: fall through.
-  }
   await Keychain.setGenericPassword(server, b64(entropy), {
     service: SERVICE,
     accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,

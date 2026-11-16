@@ -14,7 +14,8 @@ export interface Settings {
   // See src/theme.tsx for the palettes.
   themeName: 'light' | 'dark' | 'slate' | 'sepia' | 'ember';
   // Minutes in the background before the app asks for biometrics again
-  // (phones). 0 = every time it's reopened.
+  // (phones). 0 = every time it's reopened; -1 = never (the key is kept
+  // without the biometrics gate, so launches don't prompt either).
   lockAfterMin: number;
   // Android-only: switch the launcher icon to the one matching the current
   // theme (see src/appIcon.ts).

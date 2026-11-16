@@ -29,7 +29,13 @@ import {PixelField} from './components/PixelField';
 import {PortalOutlet, PortalProvider} from './components/Portal';
 import {TypingDots} from './components/TypingDots';
 import {parseShareLink} from './crypto';
-import {hasStoredIdentity, HAS_LOCK, loadIdentity, Stored} from './keystore';
+import {
+  hasStoredIdentity,
+  HAS_LOCK,
+  loadIdentity,
+  lockMode,
+  Stored,
+} from './keystore';
 import {LogoLine} from './logo/LogoArt';
 import {SplashGate} from './logo/SplashGate';
 import {splashHold} from './logo/splashHold';
@@ -133,14 +139,15 @@ function AccountGate(): React.JSX.Element {
         setGate('onboard');
         return;
       }
-      if (HAS_LOCK) {
+      if (HAS_LOCK && (await lockMode()) === 'biometric') {
         setGate('locked');
         return;
       }
-      // The browser: a remembered key opens without a prompt.
-      const stored = await loadIdentity();
+      // The browser, or a phone whose key needs no prompt (lock set to
+      // Never): open straight in.
+      const stored = await loadIdentity().catch(() => null);
       if (stored) open(stored.server, stored.entropy, null);
-      else setGate('onboard');
+      else setGate(HAS_LOCK ? 'locked' : 'onboard');
     })();
   }, [open]);
 
@@ -157,9 +164,11 @@ function AccountGate(): React.JSX.Element {
       } else if (state === 'active' && backgroundedAt.current !== null) {
         const away = Date.now() - backgroundedAt.current;
         backgroundedAt.current = null;
+        const lockAfterMin = settingsStore.get().lockAfterMin;
         if (
           session.get() &&
-          away >= settingsStore.get().lockAfterMin * 60_000
+          lockAfterMin >= 0 &&
+          away >= lockAfterMin * 60_000
         ) {
           setGate(g => (g === 'ready' ? 'locked' : g));
         }

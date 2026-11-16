@@ -149,7 +149,12 @@ export function OnboardingScreen({
   };
 
   const finish = async (entropy: Uint8Array, me: Me) => {
-    await storeIdentity(server, entropy, remember);
+    await storeIdentity(
+      server,
+      entropy,
+      remember,
+      settingsStore.get().lockAfterMin >= 0,
+    );
     await settingsStore.update({lastServer: server});
     onDone(server, entropy, me);
   };

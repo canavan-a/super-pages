@@ -63,6 +63,7 @@ export async function storeIdentity(
   server: string,
   entropy: Uint8Array,
   remember = true,
+  _requireAuth = true,
 ): Promise<LockMode> {
   await forgetIdentity();
   if (!remember) return 'none';
