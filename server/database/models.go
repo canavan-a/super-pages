@@ -88,3 +88,19 @@ func ValidRole(r string) bool { return r == RoleOwner || r == RoleEdit || r == R
 
 // CanWrite reports whether role may change a document's content.
 func CanWrite(role string) bool { return role == RoleOwner || role == RoleEdit }
+
+// PublishedPage is a page published to the web at /p/<Slug>, in the clear.
+type PublishedPage struct {
+	Slug  string `gorm:"primaryKey"`
+	DocID string
+	// PublicEdit lets anyone with the link edit it, without an account.
+	PublicEdit bool
+	Title      string
+	Body       string
+	// Version counts writes to the public copy.
+	Version int64
+	// UpdatedBy is the member who last wrote it, or "" for someone public.
+	UpdatedBy string
+	CreatedAt int64 `gorm:"autoCreateTime:false"`
+	UpdatedAt int64 `gorm:"autoUpdateTime:false"`
+}

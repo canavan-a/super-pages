@@ -48,6 +48,8 @@ type docView struct {
 	AddedAt  int64         `json:"added_at"`
 	Members  []memberView  `json:"members"`
 	Pending  []pendingView `json:"pending,omitempty"`
+	// Published says where the page is published (/p/<slug>), if it is.
+	Published *pubInfo `json:"published"`
 }
 
 type pendingView struct {
@@ -159,7 +161,7 @@ func (a *API) keysFor(user string, docs []database.Document) (map[string]string,
 	return out, nil
 }
 
-func view(d *database.Document, m *database.DocMember, key string, members []memberView) docView {
+func view(d *database.Document, m *database.DocMember, key string, members []memberView, pub *pubInfo) docView {
 	v := docView{
 		ID: d.ID, Version: d.Version, Epoch: d.KeyEpoch, HeadCt: d.HeadCt, UpdatedBy: d.UpdatedBy,
 		UpdatedAt: d.UpdatedAt, CreatedAt: d.CreatedAt, Role: m.Role, NeedsRekey: d.NeedsRekey,
@@ -171,6 +173,7 @@ func view(d *database.Document, m *database.DocMember, key string, members []mem
 	if v.Members == nil {
 		v.Members = []memberView{}
 	}
+	v.Published = pub
 	return v
 }
 
@@ -206,9 +209,14 @@ func (a *API) listDocs(c *gin.Context) {
 		dbError(c, err)
 		return
 	}
+	pubs, err := a.publishedInfo(ids)
+	if err != nil {
+		dbError(c, err)
+		return
+	}
 	out := make([]docView, len(docs))
 	for i := range docs {
-		out[i] = view(&docs[i], mine[docs[i].ID], keys[docs[i].ID], members[docs[i].ID])
+		out[i] = view(&docs[i], mine[docs[i].ID], keys[docs[i].ID], members[docs[i].ID], pubs[docs[i].ID])
 	}
 	c.JSON(http.StatusOK, gin.H{"docs": out})
 }
@@ -229,7 +237,12 @@ func (a *API) getDoc(c *gin.Context) {
 		dbError(c, err)
 		return
 	}
-	v := view(d, m, keys[d.ID], members[d.ID])
+	pubs, err := a.publishedInfo([]string{d.ID})
+	if err != nil {
+		dbError(c, err)
+		return
+	}
+	v := view(d, m, keys[d.ID], members[d.ID], pubs[d.ID])
 	v.BodyCt, v.Sig = d.BodyCt, d.Sig
 	if role == database.RoleOwner {
 		var pending []database.PendingShare
@@ -347,7 +360,12 @@ func (a *API) saveDoc(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "edited elsewhere", "version": d.Version, "epoch": d.KeyEpoch})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"version": req.BaseVersion + 1, "updated_at": now})
+	// A published page: the app sends this version to /publish too.
+	out := gin.H{"version": req.BaseVersion + 1, "updated_at": now}
+	if pubs, err := a.publishedInfo([]string{d.ID}); err == nil && pubs[d.ID] != nil {
+		out["published"] = pubs[d.ID]
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (a *API) deleteDoc(c *gin.Context) {

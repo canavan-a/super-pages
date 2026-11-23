@@ -51,7 +51,11 @@ type API struct {
 	linksPerIP    *limiter
 	livePerUser   *limiter
 
+	pubPerIP      *limiter
+	pubEditsPerIP *limiter
+
 	live *liveHub
+	pub  *pubWatch
 }
 
 func New(db *gorm.DB, cfg config.Config, m mail.Mailer) *API {
@@ -83,7 +87,13 @@ func New(db *gorm.DB, cfg config.Config, m mail.Mailer) *API {
 		// Live check-ins: a few a second per open tab while typing.
 		livePerUser: newLimiter(3000, time.Minute),
 
+		// Published pages are public; each open copy waits on one at a time.
+		pubPerIP: newLimiter(600, time.Minute),
+		// Public edits: one a second or so per open copy while typing.
+		pubEditsPerIP: newLimiter(240, time.Minute),
+
 		live: newLiveHub(),
+		pub:  newPubWatch(),
 	}
 }
 
@@ -111,6 +121,7 @@ func (a *API) Router() *gin.Engine {
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true, "app": "superpages"}) })
 	r.GET("/.well-known/assetlinks.json", a.assetLinks)
 	r.GET("/s/:id", a.landing)
+	r.GET("/p/:slug", a.publicPage)
 
 	byUser := func(c *gin.Context) string { return me(c).ID }
 	byIP := func(c *gin.Context) string { return a.clientIP(c) }
@@ -121,6 +132,9 @@ func (a *API) Router() *gin.Engine {
 	v1.POST("/auth/email/verify", a.emailVerify)
 	v1.GET("/users/:id/avatar", a.getAvatar)
 	v1.GET("/links/:id", a.rateLimit(a.linksPerIP, byIP), a.previewLink)
+	v1.GET("/pub/:slug", a.rateLimit(a.pubPerIP, byIP), a.getPublished)
+	v1.GET("/pub/:slug/blobs/:bid", a.rateLimit(a.pubPerIP, byIP), a.getPublishedBlob)
+	v1.PUT("/pub/:slug", a.rateLimit(a.pubEditsPerIP, byIP), a.putPublished)
 
 	// Signed by a key that has no account yet: the account it's creating.
 	newKey := v1.Group("", a.requireSignature(maxJSONBody))
@@ -149,6 +163,8 @@ func (a *API) Router() *gin.Engine {
 	signed.GET("/docs/:id/links", reads, a.listLinks)
 	signed.POST("/docs/:id/links", writes, a.createLink)
 	signed.DELETE("/docs/:id/links/:lid", writes, a.revokeLink)
+	signed.DELETE("/docs/:id/publish", writes, a.unpublishDoc)
+	signed.PATCH("/docs/:id/publish", writes, a.patchPublished)
 	signed.GET("/docs/:id/blobs/:bid", reads, a.getBlob)
 	signed.GET("/shares/todo", reads, a.shareTodo)
 	signed.POST("/links/:id/join", a.rateLimit(a.linksPerIP, byIP), writes, a.joinLink)
@@ -158,6 +174,7 @@ func (a *API) Router() *gin.Engine {
 	docs.PUT("/docs/:id", a.rateLimit(a.writesPerUser, byUser), a.saveDoc)
 	docs.POST("/docs/:id/rekey", a.rateLimit(a.writesPerUser, byUser), a.rekeyDoc)
 	docs.POST("/docs/:id/live", a.rateLimit(a.livePerUser, byUser), a.liveCheckIn)
+	docs.PUT("/docs/:id/publish", a.rateLimit(a.writesPerUser, byUser), a.publishDoc)
 
 	blobs := v1.Group("", a.requireSignature(a.cfg.MaxBlobBytes), a.requireUser)
 	blobs.PUT("/me/avatar", a.rateLimit(a.blobsPerUser, byUser), a.putAvatar)

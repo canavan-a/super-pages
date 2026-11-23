@@ -1,12 +1,13 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {AppState, Pressable, StyleSheet, Text, View} from 'react-native';
 
+import {api, ApiError} from '../api';
 import type {HeaderInfo, HeaderViewer} from '../App';
 import {Notice} from '../components/Notice';
 import {TypingDots} from '../components/TypingDots';
-import {b64, newId, unb64} from '../crypto';
+import {b64, decodeBody, encodeBody, newId, unb64} from '../crypto';
 import {DocEditor} from '../editor/DocEditor';
-import type {DocEditorRef} from '../editor/types';
+import type {DocEditorRef, Snapshot} from '../editor/types';
 import {pickImages} from '../files';
 import {colorForUser, Live, startLive, Viewer} from '../live';
 import {
@@ -15,8 +16,10 @@ import {
   loadImage,
   openDoc,
   OpenDoc,
+  pushPublished,
   saveDoc,
   uploadImage,
+  useStore,
 } from '../pagesStore';
 import type {Route} from '../routes';
 import {platformConfirm} from '../platformConfirm';
@@ -29,6 +32,8 @@ const SAVE_DELAY_MS = 1200;
 const MAX_IMAGE_BYTES = 15 << 20;
 /** How long leaving the page waits on its last save before asking. */
 const LEAVE_SAVE_TIMEOUT_MS = 8000;
+/** How long to wait after the public copy couldn't be reached. */
+const PUBLIC_RETRY_MS = 5000;
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error' | 'conflict';
 
@@ -110,6 +115,41 @@ export function DocScreen({
     load();
   }, [load]);
 
+  const editedRef = useRef<() => void>(() => {});
+
+  /**
+   * Sends what was just saved to the page's public copy. If the copy moved
+   * on (a public edit, or someone else's), it's merged in here first, and
+   * saved into the page like any other change.
+   */
+  const publishFrom = useCallback(
+    (saved: Snapshot) => {
+      if (!opened) return;
+      let snap = saved;
+      pushPublished(
+        id,
+        async () => ({
+          title: snap.title,
+          body: encodeBody({
+            markdown: snap.markdown,
+            y: snap.y,
+            kind: opened.kind,
+          }),
+        }),
+        async theirs => {
+          const ed = editor.current;
+          if (!ed) throw new Error('The page was closed.');
+          const y = decodeBody(theirs).y;
+          const before = await ed.snapshot();
+          if (y) ed.applyChanges([y]);
+          snap = await ed.snapshot();
+          if (snap.y !== before.y) editedRef.current();
+        },
+      ).catch(() => {});
+    },
+    [id, opened],
+  );
+
   /** Saves, merging in whatever someone else saved first. */
   const flush = useCallback(
     async (force = false): Promise<void> => {
@@ -128,7 +168,7 @@ export function DocScreen({
             const n = edits.current;
             const snap = await editor.current!.snapshot();
             try {
-              const v = await saveDoc(
+              const r = await saveDoc(
                 id,
                 base.current.version,
                 base.current.epoch,
@@ -138,8 +178,9 @@ export function DocScreen({
                 snap.y,
                 opened.kind,
               );
-              base.current.version = v;
+              base.current.version = r.version;
               savedEdits.current = n;
+              if (r.published) publishFrom(snap);
               break;
             } catch (e) {
               if (!(e instanceof ConflictError) || tries >= 3) throw e;
@@ -171,7 +212,7 @@ export function DocScreen({
       await inFlight.current;
       inFlight.current = null;
     },
-    [id, opened, load],
+    [id, opened, load, publishFrom],
   );
 
   const edited = useCallback(() => {
@@ -182,6 +223,8 @@ export function DocScreen({
       flush();
     }, SAVE_DELAY_MS);
   }, [flush]);
+
+  editedRef.current = edited;
 
   const onChange = useCallback(
     (_md: string, local: boolean) => {
@@ -335,6 +378,41 @@ export function DocScreen({
   };
 
   const canWrite = opened ? opened.doc.role !== 'view' : false;
+
+  // Published with public edits: what people without an account type
+  // there comes into the page here, and is saved (encrypted) like any edit.
+  const pub = useStore(
+    s => s.docs.find(e => e.summary.id === id)?.summary.published ?? null,
+  );
+  const publicSlug = canWrite && pub?.public_edit ? pub.slug : null;
+  useEffect(() => {
+    if (!opened || !publicSlug) return;
+    const server = session.require().server;
+    let stopped = false;
+    (async () => {
+      let since: number | undefined;
+      while (!stopped) {
+        try {
+          const p = await api.published(server, publicSlug, since, true);
+          if (stopped || !p.public_edit) return;
+          since = p.version;
+          const y = p.body ? decodeBody(p.body).y : null;
+          const ed = editor.current;
+          if (!y || !ed) continue;
+          const before = await ed.snapshot();
+          ed.applyChanges([y]);
+          const after = await ed.snapshot();
+          if (!stopped && after.y !== before.y) edited();
+        } catch (e) {
+          if (stopped || (e instanceof ApiError && e.status === 404)) return;
+          await new Promise(r => setTimeout(r, PUBLIC_RETRY_MS));
+        }
+      }
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, [opened, generation, publicSlug, edited]);
 
   const pickImage = useCallback(async () => {
     if (!opened || !canWrite) return;

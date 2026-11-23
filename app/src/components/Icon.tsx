@@ -23,6 +23,8 @@ import {
   Rows3,
   Pencil,
   Eye,
+  Dices,
+  Globe,
   Bold,
   Italic,
   List,
@@ -84,7 +86,9 @@ export type IconName =
   | 'warning'
   | 'retry'
   | 'grid'
-  | 'rows';
+  | 'rows'
+  | 'globe'
+  | 'dice';
 
 const ICONS: Record<IconName, LucideIcon> = {
   kebab: MoreVertical,
@@ -126,6 +130,8 @@ const ICONS: Record<IconName, LucideIcon> = {
   grid: LayoutGrid,
   rows: Rows3,
   canvas: Brush,
+  globe: Globe,
+  dice: Dices,
 };
 
 export function Icon({

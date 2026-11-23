@@ -9,6 +9,7 @@ import {
   DocSummary,
   Member,
   Pending,
+  PubInfo,
   Role,
   ShareLinkInfo,
   Todo,
@@ -44,6 +45,7 @@ import {
 } from './crypto';
 import {dataUri} from './files';
 import {session, Session} from './session';
+import {randomSlug} from './slugWords';
 
 export interface DocEntry {
   summary: DocSummary;
@@ -304,6 +306,7 @@ export async function createDoc(
     accepted: true,
     added_by: me?.id ?? '',
     added_at: res.updated_at,
+    published: null,
     members: me
       ? [
           {
@@ -338,7 +341,7 @@ export async function saveDoc(
   title: string,
   y: string | null = null,
   kind: DocKind = 'page',
-): Promise<number> {
+): Promise<{version: number; published: PubInfo | null}> {
   const s = session.require();
   const {head, head_ct, body_ct, sig} = sealed(
     s,
@@ -366,10 +369,13 @@ export async function saveDoc(
         head_ct,
         updated_at: res.updated_at,
         updated_by: s.me?.id ?? '',
+        published: res.published ?? null,
       },
       head,
     );
-    return res.version;
+    // A published page: the caller sends what was just saved to its public
+    // copy too (pushPublished), so it stays live.
+    return {version: res.version, published: res.published ?? null};
   } catch (e) {
     if (e instanceof ApiError && e.status === 409)
       throw new ConflictError(e.body?.version ?? base);
@@ -545,6 +551,129 @@ export async function revokeLink(id: string, link: string): Promise<void> {
   await api.revokeLink(s.server, s.account, id, link);
 }
 
+// ---- publishing ----
+
+/** Where a published page is read. */
+export function publishedUrl(slug: string): string {
+  return `${session.require().server}/p/${slug}`;
+}
+
+/** Whether slug is free to publish at (or is already this page's, current). */
+export async function slugAvailable(
+  slug: string,
+  current: string | null,
+): Promise<boolean> {
+  if (slug === current) return true;
+  const s = session.require();
+  try {
+    await api.published(s.server, slug);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return true;
+    throw e;
+  }
+  return false;
+}
+
+/** A random adjective-animal slug that isn't taken, as far as a few tries can tell. */
+export async function freeSlug(): Promise<string> {
+  let slug = randomSlug();
+  for (let i = 0; i < 6; i++) {
+    if (await slugAvailable(slug, null).catch(() => true)) return slug;
+    slug = i < 3 ? randomSlug() : `${randomSlug()}-${2 + i}`;
+  }
+  return slug;
+}
+
+// The public copy's version as this device last saw it, per page, and the
+// send in progress, so one device's sends go one at a time.
+const pubBase = new Map<string, number>();
+const pubSending = new Map<string, Promise<unknown>>();
+
+export interface PubContent {
+  title: string;
+  /** The page body as stored (encodeBody), in the clear. */
+  body: string;
+}
+
+/**
+ * Sends a page's content, in the clear, to its public copy. If the copy
+ * moved on (someone else's save, or a public edit), merge takes the newer
+ * copy in (the open editor merges its shared state), and what content()
+ * gives then is sent again. Without merge, a stale copy is an error. first
+ * publishes an unpublished page (owners).
+ */
+export function pushPublished(
+  id: string,
+  content: () => Promise<PubContent>,
+  merge?: (theirs: string) => Promise<void>,
+  first?: {slug: string; public_edit: boolean},
+): Promise<PubInfo> {
+  const s = session.require();
+  const run = async (): Promise<PubInfo> => {
+    for (let tries = 0; ; tries++) {
+      const {title, body} = await content();
+      try {
+        const res = await api.publish(s.server, s.account, id, {
+          ...first,
+          title,
+          body,
+          base: pubBase.get(id) ?? 0,
+        });
+        pubBase.set(id, res.version);
+        const info = {slug: res.slug, public_edit: res.public_edit};
+        patchSummary(id, {published: info});
+        return info;
+      } catch (e) {
+        const cur = e instanceof ApiError && e.status === 409 ? e.body : null;
+        if (!cur?.version || !merge || tries >= 4) throw e;
+        pubBase.set(id, cur.version);
+        await merge(cur.body);
+      }
+    }
+  };
+  const p = (pubSending.get(id) ?? Promise.resolve()).catch(() => {}).then(run);
+  pubSending.set(id, p);
+  return p;
+}
+
+/**
+ * Publishes a page at /p/<slug> for anyone to read. This sends the page in
+ * the clear: from now on the server can read it, and every writer's app
+ * sends it again after each save. With publicEdit, anyone with the link can
+ * edit it too.
+ */
+export async function publishDoc(
+  id: string,
+  slug: string,
+  publicEdit: boolean,
+): Promise<string> {
+  const {body, title} = await openDoc(id);
+  const res = await pushPublished(id, async () => ({title, body}), undefined, {
+    slug,
+    public_edit: publicEdit,
+  });
+  return res.slug;
+}
+
+/** Moves a published page to another slug, or turns public edits on or off. */
+export async function updatePublished(
+  id: string,
+  patch: {slug?: string; public_edit?: boolean},
+): Promise<PubInfo> {
+  const s = session.require();
+  const res = await api.patchPublished(s.server, s.account, id, patch);
+  const info = {slug: res.slug, public_edit: res.public_edit};
+  patchSummary(id, {published: info});
+  return info;
+}
+
+export async function unpublishDoc(id: string): Promise<void> {
+  const s = session.require();
+  await api.unpublish(s.server, s.account, id);
+  pubBase.delete(id);
+  patchSummary(id, {published: null});
+}
+
 export interface LinkPreview {
   doc: string;
   role: Role;
@@ -633,7 +762,7 @@ export async function processTodo(): Promise<void> {
 /** Imported images are scaled down to fit this many pixels on their long side. */
 export const MAX_IMAGE_DIM = 2048;
 
-function sniffMime(b: Uint8Array): string {
+export function sniffMime(b: Uint8Array): string {
   if (b[0] === 0xff && b[1] === 0xd8) return 'image/jpeg';
   if (b[0] === 0x89 && b[1] === 0x50) return 'image/png';
   if (b[0] === 0x47 && b[1] === 0x49) return 'image/gif';

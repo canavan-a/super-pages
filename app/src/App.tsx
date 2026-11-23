@@ -49,6 +49,10 @@ import {DocsScreen} from './screens/DocsScreen';
 import {JoinScreen} from './screens/JoinScreen';
 import {LockScreen} from './screens/LockScreen';
 import {OnboardingScreen} from './screens/OnboardingScreen';
+import {
+  PublishedScreen,
+  publishedSlugFromLocation,
+} from './screens/PublishedScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
 import {session} from './session';
 import {setDocsView, settingsStore, useSetting} from './settings';
@@ -626,6 +630,11 @@ function SystemBars({
   );
 }
 
+// A published page (/p/<slug>) is read without an account, so it skips
+// sign-in and the launch splash.
+const publishedSlug =
+  Platform.OS === 'web' ? publishedSlugFromLocation() : null;
+
 function App(): React.JSX.Element {
   return (
     <CrashScreen>
@@ -634,9 +643,13 @@ function App(): React.JSX.Element {
           <ThemeChrome />
           <SystemBars>
             <PortalProvider>
-              <SplashGate>
-                <AccountGate />
-              </SplashGate>
+              {publishedSlug ? (
+                <PublishedScreen slug={publishedSlug} />
+              ) : (
+                <SplashGate>
+                  <AccountGate />
+                </SplashGate>
+              )}
             </PortalProvider>
           </SystemBars>
         </ThemeProvider>

@@ -240,6 +240,8 @@ export interface DocSummary {
   added_by: string;
   added_at: number;
   members: Member[];
+  /** Where the page is published for anyone to read (/p/<slug>), if it is. */
+  published: PubInfo | null;
 }
 
 export interface DocFull extends DocSummary {
@@ -277,6 +279,24 @@ export interface LiveResp {
   viewers: {user: string; tab: string; aware?: string}[];
   version: number;
   epoch: number;
+}
+
+export interface PubInfo {
+  slug: string;
+  /** Anyone with the link may edit it, without an account. */
+  public_edit: boolean;
+}
+
+/** A published page as anyone reads it (GET /v1/pub/:slug). */
+export interface PublishedPage {
+  slug: string;
+  version: number;
+  public_edit: boolean;
+  /** Present unless a wait ended with nothing new. */
+  title?: string;
+  body?: string;
+  updated_at?: number;
+  unchanged?: boolean;
 }
 
 export interface ShareLinkInfo {
@@ -371,7 +391,7 @@ export const api = {
       b,
     ),
   saveDoc: (server: string, by: Signer, id: string, b: SaveBody) =>
-    request<{version: number; updated_at: number}>(
+    request<{version: number; updated_at: number; published?: PubInfo}>(
       server,
       'PUT',
       `/v1/docs/${id}`,
@@ -523,4 +543,70 @@ export const api = {
     if (res.status !== 200) throw new ApiError(res.status, 'download failed');
     return new Uint8Array(res.data as ArrayBuffer);
   },
+
+  /**
+   * Sends the page in the clear to its public copy, from version base (409
+   * with the current copy if it moved on). Unpublished, an owner's first
+   * send publishes it at slug.
+   */
+  publish: (
+    server: string,
+    by: Signer,
+    id: string,
+    b: {
+      slug?: string;
+      public_edit?: boolean;
+      title: string;
+      body: string;
+      base: number;
+    },
+  ) =>
+    request<PubInfo & {version: number}>(
+      server,
+      'PUT',
+      `/v1/docs/${id}/publish`,
+      by,
+      b,
+    ),
+  /** Moves a published page or turns public edits on or off (owners). */
+  patchPublished: (
+    server: string,
+    by: Signer,
+    id: string,
+    b: {slug?: string; public_edit?: boolean},
+  ) => request<PubInfo>(server, 'PATCH', `/v1/docs/${id}/publish`, by, b),
+  unpublish: (server: string, by: Signer, id: string) =>
+    request<void>(server, 'DELETE', `/v1/docs/${id}/publish`, by),
+  /**
+   * Unsigned: anyone can read a published page. With since, waits up to
+   * 20s for a newer version (or for public_edit to differ from edit).
+   */
+  published: (server: string, slug: string, since?: number, edit?: boolean) =>
+    request<PublishedPage>(
+      server,
+      'GET',
+      `/v1/pub/${encodeURIComponent(slug)}` +
+        (since !== undefined
+          ? `?since=${since}&wait=1` +
+            (edit !== undefined ? `&edit=${edit ? 1 : 0}` : '')
+          : ''),
+      null,
+      undefined,
+      since !== undefined ? 35_000 : REQUEST_TIMEOUT_MS,
+    ),
+  /** Unsigned: an edit by anyone with the link, where the owner allows it. */
+  putPublished: (
+    server: string,
+    slug: string,
+    b: {title: string; body: string; base: number},
+  ) =>
+    request<{version: number}>(
+      server,
+      'PUT',
+      `/v1/pub/${encodeURIComponent(slug)}`,
+      null,
+      b,
+    ),
+  publishedBlobUrl: (server: string, slug: string, blob: string) =>
+    `${server}/v1/pub/${encodeURIComponent(slug)}/blobs/${blob}`,
 };

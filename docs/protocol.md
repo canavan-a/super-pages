@@ -155,12 +155,43 @@ head and body, seals the new key to everyone who stays and sends it all in
 someone leaves on their own, the document is marked and an owner's app
 rekeys it (`shares/todo`).
 
+## Publishing
+
+An owner can publish a page at `https://<server>/p/<slug>` for anyone to
+read without an account. This is the one place a page leaves end-to-end
+encryption: the apps send the server the page **in the clear**. The slug is
+two words, an adjective and an animal ("smart-bunny"), made up by the app
+and free to change; a taken one is refused (409).
+
+- `PUT /v1/docs/:id/publish {slug, public_edit, title, body, base}`: the
+  body is the decrypted body JSON (image keys included). The first send, by
+  an owner, publishes it. After every save, a writer's app sends it again;
+  `PUT /v1/docs/:id` answers with `published` so it knows to.
+- `PATCH /v1/docs/:id/publish {slug?, public_edit?}` moves it or turns
+  public edits on or off; `DELETE` unpublishes it (owners). Deleting the
+  page unpublishes it.
+- `GET /v1/pub/:slug` (no account) reads it. With `since=<version>&wait=1`
+  it waits up to 20s for a newer version, so the page stays live.
+  `GET /v1/pub/:slug/blobs/:bid` serves its images, still sealed; their keys
+  are in the body.
+- With `public_edit`, anyone with the link may `PUT /v1/pub/:slug {title,
+  body, base}`.
+
+The public copy has its own version, and every write names the one it
+started from (`base`). A stale write gets 409 with the current copy; the
+writer merges its shared state in (Yjs states always merge) and sends
+again. A writer's app with the page open waits on the public copy too, and
+merges public edits into the page, where they're saved (encrypted) like any
+other change.
+
 ## What the server sees
 
 Email addresses, names, profile pictures (plaintext, shown to collaborators),
 public keys, locked bundles, who is in which document with which role, sizes
 and times, and who has which page open right now. Never: passphrases,
-entropy, document keys, titles, text, images or where anyone's cursor is.
+entropy, document keys, titles, text, images or where anyone's cursor is,
+except for pages published to the web, which it sees in full until they're
+unpublished.
 
 Other users' email addresses are never in any response; only `GET /v1/me`
 returns the caller's own. Every email route is rate limited (see

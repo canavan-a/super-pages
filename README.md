@@ -22,6 +22,11 @@ same themes, boot screen (a scroll that unrolls) and release flow.
 - **Sharing.** Each page can be shared by email or by link, as owner (full
   control), edit (edit only) or view. Removing someone gives the page a new
   key. Nobody can look up anyone's email address.
+- **Publishing.** An owner can put a page on the web at `/p/smart-bunny` (a
+  random adjective-animal, or any free address) for anyone to read live,
+  without an account, and can let anyone with the link edit it too. A
+  published page is no longer end-to-end encrypted: the server stores it in
+  the clear until it's unpublished.
 - **Invite-only for now.** A new account needs the pre-release invite code
   (one shared code, set on the server) before a sign-in code is emailed.
 

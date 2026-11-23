@@ -24,6 +24,9 @@ export const POLICY: PolicySection[] = [
       {
         p: 'Super Pages stores your **email address, name and profile picture** so you can sign in and so people you share pages with can recognise you. Your **pages and the images in them are end-to-end encrypted**: they are encrypted on your device, and our server cannot read them.',
       },
+      {
+        p: 'The exception is a page you **publish to the web**: its text and images are then sent to our server in readable form, so anyone with its link can read it (and edit it, if you allow that), until you unpublish it.',
+      },
       {p: 'There are no ads, no analytics and no tracking.'},
     ],
   },
@@ -58,6 +61,11 @@ export const POLICY: PolicySection[] = [
               'Page titles, text and images',
               'No, encrypted',
               'To keep your pages and sync them between devices',
+            ],
+            [
+              'Pages you publish to the web, and edits made to them by people with the link',
+              'Yes, until unpublished',
+              'To show them to anyone with the link',
             ],
             [
               'Who each page is shared with, and their role',

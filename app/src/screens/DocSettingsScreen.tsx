@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 
 import {ApiError} from '../api';
-import type {DocFull, Member, Role, ShareLinkInfo} from '../api';
+import type {DocFull, Member, PubInfo, Role, ShareLinkInfo} from '../api';
 import {copyText} from '../clipboard';
 import {Avatar} from '../components/Avatar';
 import {Icon} from '../components/Icon';
@@ -26,15 +26,22 @@ import {
   leaveDoc,
   listLinks,
   LockedError,
+  freeSlug,
   openDoc,
+  publishDoc,
+  publishedUrl,
   removeMember,
   revokeLink,
   setRole,
   shareByEmail,
+  slugAvailable,
+  unpublishDoc,
+  updatePublished,
 } from '../pagesStore';
 import {platformConfirm} from '../platformConfirm';
 import type {Route} from '../routes';
 import {session} from '../session';
+import {cleanSlug, randomSlug, validSlug} from '../slugWords';
 import {Theme, useTheme} from '../theme';
 
 const EXPIRY = [
@@ -429,6 +436,18 @@ export function DocSettingsScreen({
         </View>
       )}
 
+      {!unreadable && (owner || doc.published) && (
+        <PublishSection
+          id={id}
+          published={doc.published ?? null}
+          owner={owner}
+          busy={!!busy}
+          run={run}
+          onNote={setNote}
+          styles={styles}
+        />
+      )}
+
       <View style={styles.section}>
         {(!isOwner || owners > 1 || doc.members.length === 1) && (
           <Pressable style={styles.secondary} onPress={leave}>
@@ -457,6 +476,238 @@ export function DocSettingsScreen({
         )}
       </View>
     </ScrollView>
+  );
+}
+
+type SlugState = 'checking' | 'free' | 'taken' | 'bad' | 'error';
+
+const EDITS = [
+  {key: 0, label: 'Only people in it'},
+  {key: 1, label: 'Anyone with the link'},
+];
+
+/**
+ * Publishing to the web: a live, public copy of the page at /p/<slug>,
+ * readable without an account, and editable by anyone with the link if the
+ * owner allows it. Owners pick the address (a random adjective-animal to
+ * start) and can move or unpublish it; everyone else sees where it is.
+ */
+function PublishSection({
+  id,
+  published,
+  owner,
+  busy,
+  run,
+  onNote,
+  styles,
+}: {
+  id: string;
+  published: PubInfo | null;
+  owner: boolean;
+  busy: boolean;
+  run: (label: string, f: () => Promise<void>) => Promise<void>;
+  onNote: (note: string) => void;
+  styles: ReturnType<typeof makeStyles>;
+}): React.JSX.Element {
+  const theme = useTheme();
+  const current = published?.slug ?? null;
+  const [slug, setSlug] = useState(current ?? '');
+  const [slugState, setSlugState] = useState<SlugState | null>(null);
+  const [publicEdit, setPublicEdit] = useState(0);
+
+  // A fresh address to offer, until the page is published.
+  useEffect(() => {
+    if (current) setSlug(current);
+    else if (owner)
+      freeSlug()
+        .then(s => setSlug(cur => cur || s))
+        .catch(() => setSlug(cur => cur || randomSlug()));
+  }, [current, owner]);
+
+  // Whether what's typed is free, checked once typing pauses.
+  useEffect(() => {
+    if (!owner || !slug) return setSlugState(null);
+    if (!validSlug(slug)) return setSlugState('bad');
+    setSlugState('checking');
+    let live = true;
+    const t = setTimeout(() => {
+      slugAvailable(slug, current)
+        .then(free => live && setSlugState(free ? 'free' : 'taken'))
+        .catch(() => live && setSlugState('error'));
+    }, 350);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [slug, current, owner]);
+
+  const url = current ? publishedUrl(current) : null;
+  const changed = slug !== current;
+  const canSubmit = owner && !busy && changed && slugState === 'free';
+
+  const publish = () =>
+    run(current ? 'Moving…' : 'Publishing…', async () => {
+      const s = current
+        ? (await updatePublished(id, {slug})).slug
+        : await publishDoc(id, slug, publicEdit === 1);
+      const u = publishedUrl(s);
+      await copyText(u).catch(() => {});
+      onNote(`${current ? 'Moved' : 'Published'}. Link copied: ${u}`);
+    });
+
+  const setEdits = (on: boolean) => {
+    if (!published) return setPublicEdit(on ? 1 : 0);
+    if (on === published.public_edit) return;
+    const go = () =>
+      run('Saving…', async () => {
+        await updatePublished(id, {public_edit: on});
+        onNote(
+          on
+            ? 'Anyone with the link can now edit this page.'
+            : 'Only people in this page can edit it now.',
+        );
+      });
+    if (on)
+      platformConfirm(
+        'Let anyone edit',
+        'Anyone with the link will be able to change or delete what’s on this page, without an account. Their changes come into the page itself.',
+        'Allow',
+        go,
+      );
+    else go();
+  };
+
+  const unpublish = () =>
+    platformConfirm(
+      'Unpublish',
+      'Take this page off the web? Its public link stops working right away.',
+      'Unpublish',
+      () =>
+        run('Unpublishing…', async () => {
+          await unpublishDoc(id);
+          setSlug('');
+          setPublicEdit(0);
+          onNote('This page is no longer on the web.');
+        }),
+    );
+
+  const slugHint: Record<SlugState, string> = {
+    checking: 'Checking…',
+    free: current && !changed ? 'This page’s address.' : 'Available.',
+    taken: 'That address is taken. Try another, or roll the dice.',
+    bad: 'Use 3 to 48 lowercase letters, numbers and dashes.',
+    error: 'Couldn’t check that address.',
+  };
+  const editsOn = published ? published.public_edit : publicEdit === 1;
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.h2}>Publish to the web</Text>
+      <Text style={styles.hint}>
+        {published
+          ? published.public_edit
+            ? 'Anyone with this link can read and edit the page, without an account.'
+            : 'Anyone with this link can read the page, without an account. It updates as the page is edited.'
+          : 'Gives the page a public link anyone can read, without an account. It stays live as the page is edited.'}
+      </Text>
+      {url && (
+        <View style={styles.linkBox}>
+          <Text style={styles.linkText} selectable numberOfLines={2}>
+            {url}
+          </Text>
+          <View style={styles.row}>
+            <Pressable
+              style={styles.smallButton}
+              onPress={() => copyText(url).then(() => onNote('Link copied.'))}>
+              <Icon name="copy" size={14} color={theme.text} />
+              <Text style={styles.smallText}>Copy</Text>
+            </Pressable>
+            <Pressable
+              style={styles.smallButton}
+              onPress={() => Share.share({message: url}).catch(() => {})}>
+              <Text style={styles.smallText}>Share…</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+      {owner && (
+        <>
+          <Text style={styles.label}>Who can edit it there</Text>
+          <Chips
+            options={EDITS}
+            value={editsOn ? 1 : 0}
+            onChange={k => setEdits(k === 1)}
+            styles={styles}
+          />
+          <Text style={styles.label}>
+            {current ? 'Change address' : 'Address'}
+          </Text>
+          <View style={styles.slugRow}>
+            <Text style={styles.slugPrefix} numberOfLines={1}>
+              /p/
+            </Text>
+            <TextInput
+              style={[styles.input, styles.slugInput]}
+              value={slug}
+              onChangeText={t => setSlug(cleanSlug(t))}
+              placeholder="smart-bunny"
+              placeholderTextColor={theme.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              maxLength={48}
+              accessibilityLabel="Public address"
+              onSubmitEditing={() => canSubmit && publish()}
+            />
+            <Pressable
+              style={styles.iconButton}
+              onPress={() => setSlug(randomSlug())}
+              accessibilityLabel="Another random address">
+              <Icon name="dice" size={18} color={theme.textMuted} />
+            </Pressable>
+          </View>
+          {slugState && (
+            <Text
+              style={[
+                styles.hint,
+                (slugState === 'taken' || slugState === 'bad') && {
+                  color: theme.danger,
+                },
+              ]}>
+              {slugHint[slugState]}
+            </Text>
+          )}
+          <View style={styles.row}>
+            {published && (
+              <Pressable
+                style={[styles.smallButton, busy && styles.disabled]}
+                disabled={busy}
+                onPress={unpublish}>
+                <Icon name="close" size={14} color={theme.danger} />
+                <Text style={[styles.smallText, {color: theme.danger}]}>
+                  Unpublish
+                </Text>
+              </Pressable>
+            )}
+            <Pressable
+              style={[styles.primary, !canSubmit && styles.disabled]}
+              disabled={!canSubmit}
+              onPress={publish}>
+              <Icon name="globe" size={16} color={theme.primaryText} />
+              <Text style={styles.primaryText}>
+                {current ? 'Move' : 'Publish'}
+              </Text>
+            </Pressable>
+          </View>
+          {!published && (
+            <Text style={styles.hint}>
+              A published page isn’t end-to-end encrypted: its text and images
+              are readable by our server, and by anyone with the link, until you
+              unpublish it.
+            </Text>
+          )}
+        </>
+      )}
+    </View>
   );
 }
 
@@ -610,6 +861,9 @@ function makeStyles(theme: Theme) {
       gap: 8,
     },
     linkText: {color: theme.text, fontFamily: 'monospace', fontSize: 12},
+    slugRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
+    slugPrefix: {color: theme.textMuted, fontFamily: 'monospace', fontSize: 14},
+    slugInput: {flex: 1, fontFamily: 'monospace'},
     smallButton: {
       flexDirection: 'row',
       alignItems: 'center',
